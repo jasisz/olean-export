@@ -1,4 +1,4 @@
-use super::term::{Expr, ExprId, Id, Level, Name};
+use super::term::{Expr, ExprId, Id, Level, Name, Univs};
 use hashbrown::{hash_table::Entry, HashTable};
 use parking_lot::{Mutex, MutexGuard};
 use rustc_hash::FxBuildHasher;
@@ -314,5 +314,6 @@ impl Index<ExprId> for Exprs {
 pub(super) struct Tables {
     pub(super) names: Shared<Name>,
     pub(super) levels: Shared<Level>,
+    pub(super) univs: Shared<Univs>,
     pub(super) exprs: SharedExprs,
 }

@@ -171,6 +171,7 @@ impl Env {
         Tables {
             names: mem::replace(&mut self.names, Table(Vec::new())).thaw(),
             levels: mem::replace(&mut self.levels, Table(Vec::new())).thaw(),
+            univs: mem::replace(&mut self.univs, Table(Vec::new())).thaw(),
             exprs: SharedExprs::thaw(
                 mem::take(&mut self.exprs),
                 mem::take(&mut live.index),
@@ -182,6 +183,7 @@ impl Env {
     pub(super) fn freeze(&mut self, tables: Tables, live: &mut Live) {
         self.names = tables.names.freeze();
         self.levels = tables.levels.freeze();
+        self.univs = tables.univs.freeze();
         (self.exprs, live.index, live.ranks) = tables.exprs.freeze();
     }
 }

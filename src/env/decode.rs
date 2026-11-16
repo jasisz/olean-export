@@ -3,8 +3,8 @@ use super::{
     reload::Live,
     table::Tables,
     term::{
-        Binder, Body, Const, Ctor, Defn, Expr, ExprId, Hints, Id, Inductive, Kind, Level, LevelId,
-        Name, NameId, QuotKind, Rec, Rule, Theorem, ANON, ZERO,
+        Binder, Body, Const, Ctor, Defn, Expr, ExprId, Hints, Id, Inductive, Kind, LetNode, Level,
+        LevelId, Name, NameId, QuotKind, Rec, Rule, Theorem, Univs, ANON, ZERO,
     },
     Env,
 };
@@ -313,6 +313,7 @@ impl<'a> Decoder<'a> {
                         .into_iter()
                         .map(|l| self.level(l))
                         .collect::<Result<_>>()?;
+                    let us = self.tables.univs.intern(Univs(us));
                     Expr::Const(self.name(f(0)?)?, us)
                 }
                 5 => Expr::App(self.done(f(0)?)?, self.done(f(1)?)?),
@@ -328,19 +329,19 @@ impl<'a> Decoder<'a> {
                     self.done(f(2)?)?,
                     binder()?,
                 ),
-                8 => Expr::Let(
+                8 => Expr::Let(Box::new(LetNode(
                     self.name(f(0)?)?,
                     self.done(f(1)?)?,
                     self.done(f(2)?)?,
                     self.done(f(3)?)?,
-                ),
+                ))),
                 9 => {
                     let lit = f(0)?;
                     let val = img.field(lit, 0)?;
                     if img.tag(lit)? == 0 {
-                        Expr::Nat(img.nat_decimal(val)?.into())
+                        Expr::Nat(Box::new(img.nat_decimal(val)?.into()))
                     } else {
-                        Expr::Str(img.str(val)?.into())
+                        Expr::Str(Box::new(img.str(val)?.into()))
                     }
                 }
                 10 => {
@@ -348,7 +349,12 @@ impl<'a> Decoder<'a> {
                     self.remember(slot, id);
                     continue;
                 }
-                11 => Expr::Proj(self.name(f(0)?)?, small_nat(f(1)?)?, self.done(f(2)?)?),
+                11 => Expr::Proj(
+                    self.name(f(0)?)?,
+                    u32::try_from(small_nat(f(1)?)?)
+                        .map_err(|_| corrupt("projection index past u32"))?,
+                    self.done(f(2)?)?,
+                ),
                 t => {
                     return Err(corrupt(format!(
                         "unexpected expression tag {t} (free or meta variable in a declaration)"

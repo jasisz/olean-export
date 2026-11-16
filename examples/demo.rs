@@ -1,6 +1,6 @@
 #![allow(clippy::many_single_char_names)]
 
-use olean_export::{Env, Expr, ExprId, Kind, Level, LevelId, NameId};
+use olean_export::{Env, Expr, ExprId, Kind, LetNode, Level, LevelId, NameId};
 use std::path::PathBuf;
 
 fn level(env: &Env, l: LevelId) -> String {
@@ -50,10 +50,11 @@ fn expr(env: &Env, e: ExprId, ctx: &mut Vec<String>) -> String {
             };
             format!("{head} ({x} : {ty}), {body}")
         }
-        Expr::Let(n, t, v, b) => {
-            let (ty, val) = (expr(env, *t, ctx), expr(env, *v, ctx));
-            ctx.push(binder(env, *n, ctx.len()));
-            let body = expr(env, *b, ctx);
+        Expr::Let(l) => {
+            let LetNode(n, t, v, b) = **l;
+            let (ty, val) = (expr(env, t, ctx), expr(env, v, ctx));
+            ctx.push(binder(env, n, ctx.len()));
+            let body = expr(env, b, ctx);
             format!("let {} : {ty} := {val}; {body}", ctx.pop().unwrap())
         }
         Expr::Nat(v) => v.to_string(),

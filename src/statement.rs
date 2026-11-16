@@ -8,7 +8,8 @@
 
 use crate::{
     env::{
-        escape, resolve, Binder, Env, Expr, ExprId, Hints, Kind, Level, LevelId, Name, NameId, ANON,
+        escape, resolve, Binder, Env, Expr, ExprId, Hints, Kind, LetNode, Level, LevelId, Name,
+        NameId, ANON,
     },
     error::Result,
     olean::{small_nat, Image},
@@ -323,7 +324,7 @@ impl<'e> Printer<'e> {
                 },
                 Expr::Const(n, us) => {
                     self.out.push_str(&env.display(*n));
-                    if let Some((first, rest)) = us.split_first() {
+                    if let Some((first, rest)) = env.univs[*us].0.split_first() {
                         self.out.push_str(".{");
                         todo.push(text("}"));
                         for &u in rest.iter().rev() {
@@ -366,8 +367,10 @@ impl<'e> Printer<'e> {
                         [text(word), Step::Binders { e, lam, sep, depth }],
                     );
                 }
-                Expr::Let(n, ty, v, body) => {
-                    let x = self.fresh(*n);
+                Expr::Let(l) => {
+                    let LetNode(n, ty, v, body) = **l;
+                    let (ty, v, body) = (&ty, &v, &body);
+                    let x = self.fresh(n);
                     let items = [
                         Step::Text(format!("let {x} : ").into()),
                         Step::Expr(*ty, TOP),
@@ -454,7 +457,7 @@ impl<'e> Printer<'e> {
             let (subs, binds): (Vec<ExprId>, usize) = match self.env.exprs[x] {
                 Expr::App(a, b) => (vec![a, b], 0),
                 Expr::Lam(_, t, b, _) | Expr::Pi(_, t, b, _) => (vec![t, b], 1),
-                Expr::Let(_, t, v, b) => (vec![t, v, b], 1),
+                Expr::Let(ref l) => (vec![l.1, l.2, l.3], 1),
                 Expr::Proj(_, _, y) => (vec![y], 0),
                 _ => (Vec::new(), 0),
             };
