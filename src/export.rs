@@ -1,7 +1,7 @@
 use crate::{
     env::{
         Binder, Builtins, Const, Ctor, Dep, Depth, Env, Expr, ExprId, Family, Inductive, Kind,
-        Level, LevelId, Name, NameId, Rec, Reload, ANON, ZERO,
+        LetNode, Level, LevelId, Name, NameId, Rec, Reload, ANON, ZERO,
     },
     error::{corrupt, Error, Result},
     ndjson::Ndjson,
@@ -470,16 +470,20 @@ impl<'a, S: Sink> Exporter<'a, S> {
                     }
                     Expr::Const(n, us) => {
                         self.name(*n)?;
-                        us.iter().try_for_each(|&u| self.level(u).map(drop))?;
+                        env.univs[*us]
+                            .0
+                            .iter()
+                            .try_for_each(|&u| self.level(u).map(drop))?;
                     }
                     Expr::App(f, a) => work.extend([(*a, false), (*f, false)]),
                     Expr::Lam(n, t, b, _) | Expr::Pi(n, t, b, _) => {
                         self.name(*n)?;
                         work.extend([(*b, false), (*t, false)]);
                     }
-                    Expr::Let(n, t, v, b) => {
-                        self.name(*n)?;
-                        work.extend([(*b, false), (*v, false), (*t, false)]);
+                    Expr::Let(l) => {
+                        let LetNode(n, t, v, b) = **l;
+                        self.name(n)?;
+                        work.extend([(b, false), (v, false), (t, false)]);
                     }
                     Expr::Nat(_) | Expr::Str(_) => {
                         let mut lits = Vec::new();
@@ -512,7 +516,7 @@ impl<'a, S: Sink> Exporter<'a, S> {
                 Expr::Sort(l) => Record::Sort(level(l)),
                 Expr::Const(n, us) => Record::Const {
                     name: name(n),
-                    us: us.iter().map(level).collect(),
+                    us: env.univs[*us].0.iter().map(level).collect(),
                 },
                 Expr::App(f, a) => Record::App {
                     fun: expr(f),
@@ -522,18 +526,18 @@ impl<'a, S: Sink> Exporter<'a, S> {
                 Expr::Pi(n, t, b, bi) => Record::Pi(bind(n, t, b, bi)),
                 // Lean marks most `let`s nondep, but lean4export writes false for all of
                 // them so that terms differing only in the flag share one index.
-                Expr::Let(n, t, v, b) => Record::Let {
-                    name: name(n),
-                    ty: expr(t),
-                    value: expr(v),
-                    body: expr(b),
+                Expr::Let(l) => Record::Let {
+                    name: name(&l.0),
+                    ty: expr(&l.1),
+                    value: expr(&l.2),
+                    body: expr(&l.3),
                     nondep: false,
                 },
-                Expr::Nat(v) => Record::Nat(v.as_ref().into()),
-                Expr::Str(v) => Record::Str(v.as_ref().into()),
+                Expr::Nat(v) => Record::Nat((**v).as_ref().into()),
+                Expr::Str(v) => Record::Str((**v).as_ref().into()),
                 Expr::Proj(n, i, x) => Record::Proj {
                     type_name: name(n),
-                    idx: *i,
+                    idx: u64::from(*i),
                     struct_: expr(x),
                 },
             };

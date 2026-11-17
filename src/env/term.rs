@@ -41,6 +41,16 @@ pub type LevelId = Id<Level>;
 
 pub type ExprId = Id<Expr>;
 
+/// The universe levels of a constant, interned so that a `Const` node holds only an id.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Univs(pub Box<[LevelId]>);
+
+pub type UnivsId = Id<Univs>;
+
+/// The fields of a `let`, boxed to keep `Expr` at 16 bytes.
+#[derive(Debug, Clone)]
+pub struct LetNode(pub NameId, pub ExprId, pub ExprId, pub ExprId);
+
 pub const ANON: NameId = Id::new(0);
 
 pub const ZERO: LevelId = Id::new(0);
@@ -76,15 +86,17 @@ pub enum Binder {
 pub enum Expr {
     BVar(u64),
     Sort(LevelId),
-    Const(NameId, Box<[LevelId]>),
+    Const(NameId, UnivsId),
     App(ExprId, ExprId),
     Lam(NameId, ExprId, ExprId, Binder),
     Pi(NameId, ExprId, ExprId, Binder),
-    Let(NameId, ExprId, ExprId, ExprId),
-    Nat(Box<str>),
-    Str(Box<str>),
-    Proj(NameId, u64, ExprId),
+    Let(Box<LetNode>),
+    Nat(Box<Box<str>>),
+    Str(Box<Box<str>>),
+    Proj(NameId, u32, ExprId),
 }
+
+const _: () = assert!(std::mem::size_of::<Expr>() == 16);
 
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
@@ -95,7 +107,7 @@ impl PartialEq for Expr {
             (Self::App(f, a), Self::App(g, b)) => f == g && a == b,
             (Self::Lam(_, t, b, _), Self::Lam(_, u, c, _))
             | (Self::Pi(_, t, b, _), Self::Pi(_, u, c, _)) => t == u && b == c,
-            (Self::Let(_, t, v, b), Self::Let(_, u, w, c)) => t == u && v == w && b == c,
+            (Self::Let(x), Self::Let(y)) => x.1 == y.1 && x.2 == y.2 && x.3 == y.3,
             (Self::Nat(a), Self::Nat(b)) | (Self::Str(a), Self::Str(b)) => a == b,
             (Self::Proj(n, i, x), Self::Proj(m, j, y)) => n == m && i == j && x == y,
             _ => false,
@@ -113,18 +125,18 @@ impl Hash for Expr {
             Self::Sort(l) => h.write_u32(l.0),
             Self::Const(n, us) => {
                 h.write_u32(n.0);
-                us.iter().for_each(|u| h.write_u32(u.0));
+                h.write_u32(us.0);
             }
             Self::App(f, a) => h.write_u64(pack(f.0, a.0)),
             Self::Lam(_, t, b, _) | Self::Pi(_, t, b, _) => h.write_u64(pack(t.0, b.0)),
-            Self::Let(_, t, v, b) => {
-                h.write_u64(pack(t.0, v.0));
-                h.write_u32(b.0);
+            Self::Let(l) => {
+                h.write_u64(pack(l.1 .0, l.2 .0));
+                h.write_u32(l.3 .0);
             }
             Self::Nat(v) | Self::Str(v) => h.write(v.as_bytes()),
             Self::Proj(n, i, x) => {
                 h.write_u64(pack(n.0, x.0));
-                h.write_u64(*i);
+                h.write_u64(u64::from(*i));
             }
         }
         h.write_u8(self.tag());

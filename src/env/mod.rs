@@ -7,8 +7,8 @@ mod walk;
 pub use reload::Reload;
 pub use table::{Exprs, Table};
 pub use term::{
-    Binder, Body, Const, Ctor, Defn, Expr, ExprId, Hints, Id, Inductive, Kind, Level, LevelId,
-    Name, NameId, QuotKind, Rec, Rule, Theorem, ANON, ZERO,
+    Binder, Body, Const, Ctor, Defn, Expr, ExprId, Hints, Id, Inductive, Kind, LetNode, Level,
+    LevelId, Name, NameId, QuotKind, Rec, Rule, Theorem, Univs, UnivsId, ANON, ZERO,
 };
 pub(crate) use walk::{Builtins, Dep, Depth, Family};
 
@@ -38,6 +38,7 @@ static LINEAGE: AtomicU64 = AtomicU64::new(0);
 pub struct Env {
     pub names: Table<Name>,
     pub levels: Table<Level>,
+    pub univs: Table<Univs>,
     pub exprs: Exprs,
     pub consts: FxHashMap<NameId, Const>,
     pub order: Vec<NameId>,
@@ -185,6 +186,7 @@ impl Env {
         let tables = Tables {
             names: Shared::new(Name::Anon, estimate(1200)),
             levels: Shared::new(Level::Zero, 0),
+            univs: Shared::new(Univs(Box::new([])), 0),
             exprs: SharedExprs::new(estimate(64)),
         };
         let paths: Vec<_> = found.iter().map(|(_, p)| p.as_path()).enumerate().collect();
@@ -195,6 +197,7 @@ impl Env {
         let mut env = Self {
             names: tables.names.freeze(),
             levels: tables.levels.freeze(),
+            univs: tables.univs.freeze(),
             exprs,
             consts: FxHashMap::default(),
             order: Vec::new(),

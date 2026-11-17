@@ -216,7 +216,7 @@ impl Env {
                 f(Dep::Expr(*x));
                 f(Dep::Expr(*y));
             }
-            Expr::Let(_, t, v, x) => [t, v, x].into_iter().for_each(|&e| f(Dep::Expr(e))),
+            Expr::Let(l) => [l.1, l.2, l.3].into_iter().for_each(|e| f(Dep::Expr(e))),
             Expr::Proj(_, _, x) => f(Dep::Expr(*x)),
             Expr::Nat(_) => b.nat.into_iter().for_each(|c| f(Dep::Literal(c))),
             Expr::Str(_) => b
