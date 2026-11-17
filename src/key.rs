@@ -330,24 +330,23 @@ impl Keys {
 
 /// Little-endian bytes of a decimal numeral, `[0]` for zero, as `BigUint::to_bytes_le`.
 fn nat_le(digits: &str) -> Result<Vec<u8>> {
-    let mut v = vec![0u8];
-    for c in digits.bytes() {
-        if !c.is_ascii_digit() {
-            return Err(corrupt("keys: invalid natural literal"));
-        }
-        let mut carry = u32::from(c - b'0');
-        for b in &mut v {
-            let x = u32::from(*b) * 10 + carry;
-            *b = x.to_le_bytes()[0];
-            carry = x >> 8;
-        }
-        while carry > 0 {
-            v.push(carry.to_le_bytes()[0]);
-            carry >>= 8;
-        }
+    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return Err(corrupt("keys: invalid natural literal"));
     }
+    // divide and conquer (malachite): digit by digit is quadratic on huge literals
+    let n: malachite_nz::natural::Natural = digits
+        .parse()
+        .map_err(|()| corrupt("keys: invalid natural literal"))?;
+    let mut v: Vec<u8> = n
+        .to_limbs_asc()
+        .iter()
+        .flat_map(|l| l.to_le_bytes())
+        .collect();
     while v.len() > 1 && v.last() == Some(&0) {
         v.pop();
+    }
+    if v.is_empty() {
+        v.push(0);
     }
     Ok(v)
 }
@@ -654,5 +653,52 @@ impl<'k> Enc<'k> {
                 Some(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod nat_le_tests {
+    use super::nat_le;
+
+    /// The conversion this replaces: digit by digit, quadratic.
+    fn schoolbook(digits: &str) -> Vec<u8> {
+        let mut v = vec![0u8];
+        for c in digits.bytes() {
+            let mut carry = u32::from(c - b'0');
+            for b in &mut v {
+                let x = u32::from(*b) * 10 + carry;
+                *b = x.to_le_bytes()[0];
+                carry = x >> 8;
+            }
+            while carry > 0 {
+                v.push(carry.to_le_bytes()[0]);
+                carry >>= 8;
+            }
+        }
+        while v.len() > 1 && v.last() == Some(&0) {
+            v.pop();
+        }
+        v
+    }
+
+    #[test]
+    fn agrees_with_schoolbook() {
+        let long: String = (0..5000_usize)
+            .map(|i| char::from(b"0123456789"[i * 7 % 10]))
+            .collect();
+        for d in [
+            "0",
+            "00",
+            "1",
+            "255",
+            "256",
+            "18446744073709551616",
+            "000123",
+            &long,
+        ] {
+            assert_eq!(nat_le(d).unwrap(), schoolbook(d), "{d}");
+        }
+        assert!(nat_le("").is_err());
+        assert!(nat_le("12a").is_err());
     }
 }
