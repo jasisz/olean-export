@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-11-17)
 
 - Add `--interfaces`, per-module exports that follow the module system.
 - Add `join -m MODULE`, one module over its imports' interfaces.
@@ -10,8 +10,8 @@
 - `--per-module` shows progress while writing.
 - Per-module imports carry `all`, `public` and `meta`, so file hashes change.
 - `Env::imports` holds `inspect::Import`, and `Env::exported` what a module exports.
-- Expressions take 16 bytes in place of 24: `Expr::Const` holds an interned `UnivsId` (levels in `Env::univs`),
-  `Expr::Let` boxes its fields in `LetNode`, literals are boxed, and `Expr::Proj` holds a `u32`.
+- Expressions take 16 bytes in place of 24: `Expr::Const` holds an interned `UnivsId` (levels in `Env::univs`), `Expr::Let` boxes its fields in `LetNode`, literals are boxed, and `Expr::Proj` holds a `u32`.
+- Big Nat literals convert to decimal in subquadratic time.
 
 ## 0.6.0 (2026-11-09)
 

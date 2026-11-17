@@ -1,11 +1,10 @@
 [package]
 name = "olean-export"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Stephen Diehl <stephen.m.diehl@gmail.com>"]
 categories = ["mathematics", "parser-implementations", "command-line-utilities"]
 documentation = "https://docs.rs/olean-export"
 edition = "2021"
-homepage = "https://github.com/sdiehl/olean-export"
 include = [
   "src/**/*",
   "examples/demo.rs",

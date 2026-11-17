@@ -139,9 +139,8 @@ pub fn resolve(search: &[PathBuf], module: &str) -> Result<PathBuf> {
 
 #[must_use]
 pub fn search_path() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = env::var_os("LEAN_PATH")
-        .map(|p| env::split_paths(&p).collect())
-        .unwrap_or_default();
+    let mut dirs: Vec<PathBuf> =
+        env::var_os("LEAN_PATH").map_or_default(|p| env::split_paths(&p).collect());
     if let Some(root) = env::var_os("LEAN_SYSROOT") {
         dirs.push(Path::new(&root).join("lib").join("lean"));
     }
@@ -268,7 +267,7 @@ impl Env {
         self.modules = loaded.iter().map(|l| l.module.clone()).collect();
         self.imports = loaded.iter().map(|l| l.imports.clone()).collect();
         self.exported = loaded.iter().map(|l| l.exported.clone()).collect();
-        self.header = loaded.last().map(|l| l.header.clone()).unwrap_or_default();
+        self.header = loaded.last().map_or_default(|l| l.header.clone());
         self.skipped = loaded.iter().map(|l| l.skipped).sum();
         self.ends = loaded
             .iter()
