@@ -1,6 +1,6 @@
 use crate::error::{at, corrupt, Error, Result};
 use memmap2::{Mmap, MmapOptions};
-use std::{fmt::Write as _, fs::File, ops::RangeInclusive, path::Path, str};
+use std::{fs::File, ops::RangeInclusive, path::Path, str};
 
 // `ConstantInfo` constructor tags.
 pub(crate) const AXIOM: u8 = 0;
@@ -103,7 +103,7 @@ impl Image {
         let version = cstr(&bytes[7..40]);
         let minor = version
             .strip_prefix("4.")
-            .and_then(|v| v.split('.').next()?.parse().ok());
+            .and_then(|v| v.split('.').next()?.parse::<u32>().ok());
         if !minor.is_some_and(|m| SUPPORTED.contains(&m)) {
             return Err(Error::UnsupportedLean(version));
         }
@@ -288,12 +288,12 @@ impl Image {
         if self.u64(at - 8)? != at {
             return Err(corrupt(format!("Nat at {o:#x} does not hold its digits")));
         }
-        let mut digits = self
+        let digits: Vec<u64> = self
             .bytes(at, len)?
             .chunks(8)
             .map(|c| c.iter().rev().fold(0, |v, &b| v << 8 | u64::from(b)))
             .collect();
-        Ok(decimal(&mut digits))
+        Ok(decimal(&digits))
     }
 }
 
@@ -317,24 +317,66 @@ fn le64(b: &[u8]) -> u64 {
     u64::from_le_bytes(a)
 }
 
-fn decimal(limbs: &mut Vec<u64>) -> String {
-    const CHUNK: u64 = 10_000_000_000_000_000_000;
-    let mut parts = Vec::new();
-    while limbs.iter().any(|&l| l != 0) {
-        let mut rem = 0u128;
-        for l in limbs.iter_mut().rev() {
-            let cur = (rem << 64) | u128::from(*l);
-            *l = u64::try_from(cur / u128::from(CHUNK)).expect("quotient fits");
-            rem = cur % u128::from(CHUNK);
+/// The decimal digits of the natural number with little-endian 64-bit `limbs`.
+///
+/// Divide and conquer (malachite): converting one limb at a time is quadratic, and some
+/// developments hold literals of millions of digits (CFSG's certificates: the export spent
+/// over an hour here before).
+fn decimal(limbs: &[u64]) -> String {
+    malachite_nz::natural::Natural::from_limbs_asc(limbs).to_string()
+}
+
+#[cfg(test)]
+mod decimal_tests {
+    use super::decimal;
+    use std::fmt::Write as _;
+
+    /// The conversion this replaces: one limb at a time, quadratic.
+    fn schoolbook(limbs: &[u64]) -> String {
+        const CHUNK: u128 = 10_000_000_000_000_000_000;
+        let mut limbs = limbs.to_vec();
+        let mut parts = Vec::new();
+        while limbs.iter().any(|&l| l != 0) {
+            let mut rem = 0u128;
+            for l in limbs.iter_mut().rev() {
+                let cur = (rem << 64) | u128::from(*l);
+                *l = u64::try_from(cur / CHUNK).unwrap();
+                rem = cur % CHUNK;
+            }
+            parts.push(u64::try_from(rem).unwrap());
+            while limbs.last() == Some(&0) {
+                limbs.pop();
+            }
         }
-        parts.push(u64::try_from(rem).expect("remainder fits"));
-        while limbs.last() == Some(&0) {
-            limbs.pop();
+        let mut s = parts.pop().unwrap_or(0).to_string();
+        for p in parts.iter().rev() {
+            write!(s, "{p:019}").unwrap();
+        }
+        s
+    }
+
+    #[test]
+    fn agrees_with_schoolbook() {
+        let mut x = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for limbs in [
+            vec![],
+            vec![0],
+            vec![1],
+            vec![u64::MAX],
+            vec![0, 1],
+            vec![u64::MAX; 3],
+        ] {
+            assert_eq!(decimal(&limbs), schoolbook(&limbs), "{limbs:?}");
+        }
+        for n in [1, 2, 7, 40, 300, 2000] {
+            let limbs: Vec<u64> = (0..n).map(|_| next()).collect();
+            assert_eq!(decimal(&limbs), schoolbook(&limbs), "{n} limbs");
         }
     }
-    let mut s = parts.pop().unwrap_or(0).to_string();
-    for p in parts.iter().rev() {
-        let _ = write!(s, "{p:019}");
-    }
-    s
 }
