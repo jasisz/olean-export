@@ -2,6 +2,8 @@
 
 A Rust swiss army knife for reading and manipulating `.olean` files, usable from the CLI or inside Rust kernels, without running Lean.
 
+It is designed for massive developments (multimillion-line proof libraries), where you want to selectively export individual theorems and their dependencies without the whole environment blowing up in memory.
+
 - Emits [lean4export](https://github.com/leanprover/lean4export) NDJSON, much faster
 - BLean, a compact binary export format
 - Cone export of chosen constants
