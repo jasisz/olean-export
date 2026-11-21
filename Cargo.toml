@@ -69,6 +69,11 @@ multiple_crate_versions = "allow"
 insta = { version = "1.41", features = ["glob"] }
 tempfile = "3.27.0"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

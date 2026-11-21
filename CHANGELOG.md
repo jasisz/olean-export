@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Ship Linux and macOS release binaries.
+
 ## 0.7.1 (2026-11-22)
 
 - Read Lean 4.36 oleans.

@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release to attach binaries to, or empty to only build them
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,6 +16,7 @@ env:
 jobs:
   publish:
     name: Publish
+    if: github.event_name == 'push'
     runs-on: ubuntu-26.04
     permissions:
       contents: write
@@ -47,5 +53,70 @@ jobs:
 
       - name: Create GitHub release
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  binaries:
+    name: Binary ${{ matrix.target }}
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result != 'failure' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-26.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-26.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG || github.ref }}
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --features mimalloc --target ${{ matrix.target }}
+
+      - name: Smoke test
+        if: ${{ !startsWith(matrix.target, 'x86_64-apple') }}
+        run: ./target/${{ matrix.target }}/release/olean-export --version
+
+      - name: Package
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          dir="olean-export-v$version-${{ matrix.target }}"
+          mkdir "$dir"
+          cp "target/${{ matrix.target }}/release/olean-export" README.md LICENSE CHANGELOG.md "$dir"
+          tar czf "$dir.tar.gz" "$dir"
+          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}*
+
+      - name: Attach to release
+        if: env.TAG != ''
+        run: gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
         env:
           GH_TOKEN: ${{ github.token }}

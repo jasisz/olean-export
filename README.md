@@ -21,6 +21,8 @@ cargo install olean-export
 
 Add `--features mimalloc` to build with the mimalloc allocator.
 
+Releases also ship prebuilt binaries for Linux (x86_64, arm64, static musl) and macOS (arm64, x86_64), built with mimalloc. `cargo binstall olean-export` fetches the one for your platform.
+
 ## Example
 
 [`examples/Hello.lean`](examples/Hello.lean) is compiled to an olean with plain `lean`:
