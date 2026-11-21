@@ -20,6 +20,7 @@ keywords = ["lean", "lean4", "olean", "theorem-prover", "kernel"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/sdiehl/olean-export"
+rust-version = "1.100"
 description = "Optimized library for reading Lean .olean files directly emitting lean4export-compatible NDJSON for external kernel checkers."
 
 [dependencies]

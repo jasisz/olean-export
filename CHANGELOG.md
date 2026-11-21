@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Read Lean 4.36 oleans.
+- Require Rust 1.100.
 
 ## 0.7.0 (2026-11-17)
 
