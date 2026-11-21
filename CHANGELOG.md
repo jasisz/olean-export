@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Read Lean 4.36 oleans.
+
 ## 0.7.0 (2026-11-17)
 
 - Add `--interfaces`, per-module exports that follow the module system.

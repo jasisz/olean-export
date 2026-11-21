@@ -13,7 +13,7 @@ It is designed for massive developments (multimillion-line proof libraries), whe
 - Closure keys and accepted store for incremental checking
 - `inspect` and `compare` for oleans and exports
 
-The object layout is tied to the Lean release. This version reads olean format v2 as written by Lean 4.26 through 4.35, and refuses files from any other release.
+The object layout is tied to the Lean release. This version reads olean format v2 as written by Lean 4.26 through 4.36, and refuses files from any other release.
 
 ```bash
 cargo install olean-export

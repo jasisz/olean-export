@@ -54,7 +54,7 @@ pub(crate) struct Image {
 }
 
 /// The Lean releases whose object layouts this reader has been checked against.
-pub const SUPPORTED: RangeInclusive<u32> = 26..=35;
+pub const SUPPORTED: RangeInclusive<u32> = 26..=36;
 
 fn cstr(b: &[u8]) -> String {
     String::from_utf8_lossy(b.split(|&c| c == 0).next().unwrap_or_default()).into_owned()
