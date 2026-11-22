@@ -63,7 +63,7 @@ impl<'e> Family<'e> {
     }
 
     /// Every term of the block, in the order lean4export visits them.
-    fn terms(&self) -> impl Iterator<Item = ExprId> + '_ {
+    pub(crate) fn terms(&self) -> impl Iterator<Item = ExprId> + '_ {
         let rules = self
             .recs
             .iter()
@@ -156,7 +156,18 @@ impl Env {
     /// definitions and whole inductive families, but no proof. A theorem reached inside a
     /// definition is taken as stated, as [`crate::Exporter::statements`] writes it.
     pub fn statement(&self, consts: &[NameId]) -> Result<Vec<(usize, NameId)>> {
-        let mut w = Walk::new(Depth::Statements);
+        self.closure(consts, Depth::Statements)
+    }
+
+    /// Everything exporting `consts` writes, proofs included, with the index of each one's
+    /// module, in load order. Every theorem it reaches must have its value decoded, as
+    /// [`Env::load_with`] and [`Env::load_cone`] of the same constants leave it.
+    pub fn cone(&self, consts: &[NameId]) -> Result<Vec<(usize, NameId)>> {
+        self.closure(consts, Depth::Full)
+    }
+
+    fn closure(&self, consts: &[NameId], depth: Depth) -> Result<Vec<(usize, NameId)>> {
+        let mut w = Walk::new(depth);
         let todo = consts
             .iter()
             .map(|&c| {
@@ -166,7 +177,12 @@ impl Env {
                     .ok_or_else(|| Error::UnknownConstant(self.display(c)))
             })
             .collect::<Result<_>>()?;
-        self.walk(&mut w, todo)?;
+        if let Some(&c) = self.walk(&mut w, todo)?.first() {
+            return Err(corrupt(format!(
+                "the value of {} is not loaded",
+                self.display(c)
+            )));
+        }
         let mut module = 0;
         Ok(self
             .order

@@ -12,6 +12,7 @@ It is designed for massive developments (multimillion-line proof libraries), whe
 - Modular checking with module-system-restricted imports
 - Closure keys and accepted store for incremental checking
 - `inspect` and `compare` for oleans and exports
+- `unused`, `axioms` and `digest` for auditing a theorem's cone
 
 The object layout is tied to the Lean release. This version reads olean format v2 as written by Lean 4.26 through 4.36, and refuses files from any other release.
 
@@ -73,6 +74,21 @@ lake env olean-export Mathlib -c Fin.insertNth_apply_succAbove -f blean -o thm.b
 lake env olean-export statement FLT -c THEOREM --trust Init,Std,Lean,Mathlib
 ```
 
+## Audit
+
+`unused -c NAME` lists what the full cone of `NAME` leaves unused, outside `--trust` modules: whole files, then each declaration with its source range. A tag lists the attributes that mention it, like `instance` or `simp`, which may use it only while elaborating.
+
+`axioms` prints the axioms each declaration rests on, as `#print axioms` collects them, for the cone of `-c NAME` or all loaded modules. `--uses AXIOMS` keeps declarations resting on one of them, `--only AXIOMS` those resting on anything else, and `--why` shows a chain down to the axiom.
+
+`digest -c NAME` prints two closure keys: one for the statement cone, one for the full cone. They ignore ids, record order, paths and the exporter, so they make a stable receipt for a build.
+
+```bash
+lake env olean-export unused RH -c riemannHypothesis --trust Init,Std,Lean,Mathlib
+lake env olean-export axioms RH -c riemannHypothesis --uses Classical.choice --why
+lake env olean-export axioms Mathlib --trust Init,Std,Lean --only propext,Quot.sound
+lake env olean-export digest RH -c riemannHypothesis
+```
+
 ## Incremental
 
 `--per-module DIR` writes one export per module, pinned to its imports by hash, and `join` merges them back into one. `keys` prints a closure key per declaration, and `accepted` lists a store of keys checkers have already accepted.
@@ -119,6 +135,20 @@ $ lean4export Top > want.ndjson
 $ olean-export Top -f blean -o got.blean
 $ olean-export compare want.ndjson got.blean
 33 / 33 declarations: 0 only in the first, 0 only in the second, 0 differ, 0 duplicate
+```
+
+`--statements` separates statement changes from proof-only changes. It matches renamed declarations by statement, and `-c NAME` checks whether a theorem's statement cone was kept exactly. To check a toolchain bump, export the cone from each build and compare them. The exit status is nonzero if a statement changed.
+
+```bash
+$ olean-export -L tests/cases/build/edit Top -o new.ndjson
+$ olean-export compare want.ndjson new.ndjson --statements -c N.add_zero -c two
+statement: two (value)
+removed: letty
+added: three
+33 / 33 declarations: 31 same, 0 proof only, 1 statement, 0 renamed, 1 removed, 1 added
+N.add_zero: statement kept exactly
+two: statement changed, through two
+error: statements differ
 ```
 
 ## Performance

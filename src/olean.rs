@@ -250,6 +250,15 @@ impl Image {
         str::from_utf8(bytes).map_err(corrupt)
     }
 
+    /// Whether `o` is a `Name.str`, as far as its shape tells.
+    pub(crate) fn is_name_str(&self, o: u64) -> Result<bool> {
+        Ok(!is_scalar(o)
+            && self.tag(o)? == 1
+            && self.u8(o + 6)? == 2
+            && !is_scalar(self.field(o, 1)?)
+            && self.tag(self.field(o, 1)?)? == STRING)
+    }
+
     pub(crate) fn array(&self, o: u64) -> Result<Vec<u64>> {
         self.expect(o, ARRAY, "an array")?;
         (0..self.u64(o + 8)?)

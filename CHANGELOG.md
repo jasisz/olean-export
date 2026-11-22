@@ -3,6 +3,12 @@
 ## Unreleased
 
 - Ship Linux and macOS release binaries.
+- Add `unused`, what a cone leaves unused.
+- Add `axioms`, query declarations by axiom set.
+- Add `digest`, statement and full closure keys.
+- Add `compare --statements`, proof changes and renames.
+- Add `compare -c NAME`, check a statement kept.
+- Add `Env::cone`, the full cone in order.
 
 ## 0.7.1 (2026-11-22)
 

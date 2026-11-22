@@ -154,6 +154,62 @@ enum Command {
         /// Show at most N names per list
         #[arg(short = 'n', long, value_name = "N", default_value_t = 20)]
         limit: usize,
+        /// Tell statement changes from proof changes, and match renamed declarations
+        #[arg(short, long)]
+        statements: bool,
+        /// With --statements, check this theorem's statement was kept exactly (repeatable)
+        #[arg(short, long = "const", value_name = "NAME", requires = "statements")]
+        consts: Vec<String>,
+    },
+    /// List what the full cone of theorems leaves unused, with source ranges
+    Unused {
+        #[arg(required = true, value_name = "MODULE")]
+        modules: Vec<String>,
+        /// A theorem whose cone counts as used (repeatable)
+        #[arg(short, long = "const", value_name = "NAME", required = true)]
+        consts: Vec<String>,
+        /// Leave out modules named or prefixed by these, e.g. `Init,Std,Mathlib`
+        #[arg(short, long, value_delimiter = ',', value_name = "MODULES")]
+        trust: Vec<String>,
+        /// Write to FILE instead of stdout
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
+    /// Print the axioms each declaration rests on, or query by axiom
+    Axioms {
+        #[arg(required = true, value_name = "MODULE")]
+        modules: Vec<String>,
+        /// Only the cone of these constants (repeatable)
+        #[arg(short, long = "const", value_name = "NAME")]
+        consts: Vec<String>,
+        /// Leave out modules named or prefixed by these, e.g. `Init,Std,Mathlib`
+        #[arg(short, long, value_delimiter = ',', value_name = "MODULES")]
+        trust: Vec<String>,
+        /// Only declarations resting on one of these axioms
+        #[arg(short, long, value_delimiter = ',', value_name = "AXIOMS")]
+        uses: Vec<String>,
+        /// Only declarations resting on an axiom outside these
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "AXIOMS",
+            conflicts_with = "uses"
+        )]
+        only: Option<Vec<String>>,
+        /// Show a chain of constants down to the axiom that selected each one
+        #[arg(short, long)]
+        why: bool,
+        /// Write to FILE instead of stdout
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
+    /// Print closure keys of theorems' statement cones and full cones
+    Digest {
+        #[arg(required = true, value_name = "MODULE")]
+        modules: Vec<String>,
+        /// A constant to digest (repeatable)
+        #[arg(short, long = "const", value_name = "NAME", required = true)]
+        consts: Vec<String>,
     },
 }
 
@@ -179,7 +235,55 @@ fn main() -> ExitCode {
     let result = match &cli.command {
         Some(Command::Inspect { target, consts }) => inspect(&cli, target, *consts),
         Some(Command::Convert { input, output }) => convert(input, output.as_ref()),
-        Some(Command::Compare { a, b, limit }) => compare(a, b, *limit),
+        Some(Command::Compare {
+            a,
+            b,
+            limit,
+            statements: false,
+            ..
+        }) => compare(a, b, *limit),
+        Some(Command::Compare {
+            a,
+            b,
+            limit,
+            consts,
+            ..
+        }) => drift(a, b, *limit, consts),
+        Some(Command::Unused {
+            modules,
+            consts,
+            trust,
+            output,
+        }) => audit(
+            &cli,
+            modules,
+            consts,
+            output.as_ref(),
+            |env, search, roots, out| olean_export::audit::unused(env, search, roots, trust, out),
+        ),
+        Some(Command::Axioms {
+            modules,
+            consts,
+            trust,
+            uses,
+            only,
+            why,
+            output,
+        }) => audit(
+            &cli,
+            modules,
+            consts,
+            output.as_ref(),
+            |env, _, roots, out| {
+                let q = olean_export::audit::Axioms {
+                    uses,
+                    only: only.as_deref(),
+                    why: *why,
+                };
+                olean_export::audit::axioms(env, roots, trust, &q, out)
+            },
+        ),
+        Some(Command::Digest { modules, consts }) => digest(&cli, modules, consts),
         Some(Command::Join {
             files,
             module,
@@ -587,6 +691,123 @@ fn compare(a: &PathBuf, b: &PathBuf, limit: usize) -> Res {
     } else {
         Err("the exports differ".into())
     }
+}
+
+fn drift(a: &PathBuf, b: &PathBuf, limit: usize, targets: &[String]) -> Res {
+    use olean_export::compare::Verdict;
+    let d = olean_export::compare::drift(&mmap(a)?, &mmap(b)?, targets)?;
+    let mut out = io::stdout().lock();
+    let mut list = |what: &str, names: &[String]| -> io::Result<()> {
+        for n in names.iter().take(limit) {
+            writeln!(out, "{what}: {n}")?;
+        }
+        if names.len() > limit {
+            writeln!(out, "{what}: ... {} more", names.len() - limit)?;
+        }
+        Ok(())
+    };
+    let stated: Vec<String> = d
+        .statements
+        .iter()
+        .map(|(n, w)| format!("{n} ({w})"))
+        .collect();
+    list("statement", &stated)?;
+    list("proof", &d.proofs)?;
+    let renamed: Vec<String> = d
+        .renamed
+        .iter()
+        .map(|(x, y)| format!("{x} -> {y}"))
+        .collect();
+    list("renamed", &renamed)?;
+    list("removed", &d.removed)?;
+    list("added", &d.added)?;
+    writeln!(
+        out,
+        "{} / {} declarations: {} same, {} proof only, {} statement, {} renamed, {} removed, {} added",
+        d.decls.0,
+        d.decls.1,
+        d.same,
+        d.proofs.len(),
+        d.statements.len(),
+        d.renamed.len(),
+        d.removed.len(),
+        d.added.len()
+    )?;
+    let mut kept = true;
+    for (t, v) in &d.targets {
+        match v {
+            Verdict::Kept => writeln!(out, "{t}: statement kept exactly")?,
+            Verdict::Missing => {
+                kept = false;
+                writeln!(out, "{t}: not in {}", a.display())?;
+            }
+            Verdict::Changed(c) => {
+                kept = false;
+                writeln!(out, "{t}: statement changed, through {}", c.join(", "))?;
+            }
+        }
+    }
+    if !kept || (d.targets.is_empty() && !d.statements.is_empty()) {
+        Err("statements differ".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Load the cone of `consts`, or every module when there are none, and run `f` on it with a
+/// stack deep enough for any term.
+fn audit(
+    cli: &Cli,
+    modules: &[String],
+    consts: &[String],
+    output: Option<&PathBuf>,
+    f: impl FnOnce(&Env, &[PathBuf], &[NameId], &mut dyn Write) -> olean_export::Result<()> + Send,
+) -> Res {
+    let search = search(cli)?;
+    let roots: Vec<&str> = modules.iter().map(String::as_str).collect();
+    let names: Vec<&str> = consts.iter().map(String::as_str).collect();
+    let env = if names.is_empty() {
+        Env::load_with(&search, &roots, jobs(cli), &|_, _| {})?
+    } else {
+        Env::load_cone(&search, &roots, &names, jobs(cli), &|_, _| {})?
+    };
+    let targets = consts
+        .iter()
+        .map(|n| {
+            env.find_name(n)
+                .ok_or_else(|| format!("unknown constant {n}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    deep(|| {
+        let mut out = out(output)?;
+        f(&env, &search, &targets, &mut out)?;
+        Ok(out.flush()?)
+    })
+}
+
+fn deep<T: Send>(
+    f: impl FnOnce() -> olean_export::Result<T> + Send,
+) -> Result<T, Box<dyn Error + Send + Sync>> {
+    thread::scope(|s| {
+        thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn_scoped(s, f)?
+            .join()
+            .map_err(|_| "worker thread panicked")?
+            .map_err(Box::<dyn Error + Send + Sync>::from)
+    })
+}
+
+fn digest(cli: &Cli, modules: &[String], consts: &[String]) -> Res {
+    audit(cli, modules, consts, None, |env, _, roots, out| {
+        for d in olean_export::audit::digest(env, roots)? {
+            for (what, (key, n)) in [("statement", d.statement), ("full", d.full)] {
+                let key = key.map_or_else(|| "-".repeat(64), |k| hex(&k));
+                writeln!(out, "{what:9} {key} {} ({n} declarations)", d.name)?;
+            }
+        }
+        Ok(())
+    })
 }
 
 fn convert(input: &PathBuf, output: Option<&PathBuf>) -> Res {

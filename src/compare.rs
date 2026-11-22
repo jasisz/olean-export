@@ -14,7 +14,7 @@ use crate::{
 };
 use hashbrown::{hash_table::Entry, HashTable};
 use parking_lot::Mutex;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::{cell::Cell, hash::BuildHasher, mem, thread};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -371,31 +371,36 @@ impl Diff {
     }
 }
 
-/// Compare two exports, each NDJSON or blean.
-pub fn compare(a: &[u8], b: &[u8]) -> Result<Diff> {
-    fn load(bytes: &[u8], side: &mut Side<'_>) -> Result<()> {
-        if blean::sniff(bytes) {
-            blean::read(bytes, side)
-        } else {
-            ndjson::read(bytes, side)
-        }
-    }
-    let canon = Canon::new();
+type Loaded = (FxHashMap<u32, Decl>, usize, Vec<u32>);
+
+fn load_both(canon: &Canon, a: &[u8], b: &[u8]) -> Result<(Loaded, Loaded)> {
     let side = |bytes: &[u8]| {
-        let mut s = Side::new(&canon);
-        load(bytes, &mut s).map(|()| (s.decls, s.count, s.dups))
+        let mut s = Side::new(canon);
+        if blean::sniff(bytes) {
+            blean::read(bytes, &mut s)?;
+        } else {
+            ndjson::read(bytes, &mut s)?;
+        }
+        Ok::<_, crate::Error>((s.decls, s.count, s.dups))
     };
     let (ra, rb) = thread::scope(|t| {
         let a = t.spawn(|| side(a));
         let b = side(b);
         (a.join().expect("compare thread panicked"), b)
     });
-    let ((da, ca, pa), (db, cb, pb)) = (ra?, rb?);
-    let names = |ks: &mut dyn Iterator<Item = u32>| {
-        let mut v: Vec<String> = ks.map(|k| canon.name(k)).collect();
-        v.sort_unstable();
-        v
-    };
+    Ok((ra?, rb?))
+}
+
+fn sorted(canon: &Canon, ks: impl Iterator<Item = u32>) -> Vec<String> {
+    let mut v: Vec<String> = ks.map(|k| canon.name(k)).collect();
+    v.sort_unstable();
+    v
+}
+
+/// Compare two exports, each NDJSON or blean.
+pub fn compare(a: &[u8], b: &[u8]) -> Result<Diff> {
+    let canon = Canon::new();
+    let ((da, ca, pa), (db, cb, pb)) = load_both(&canon, a, b)?;
     let mut differ: Vec<_> = da
         .iter()
         .filter_map(|(k, x)| {
@@ -406,9 +411,207 @@ pub fn compare(a: &[u8], b: &[u8]) -> Result<Diff> {
     differ.sort_unstable();
     Ok(Diff {
         decls: (ca, cb),
-        only_a: names(&mut da.keys().copied().filter(|k| !db.contains_key(k))),
-        only_b: names(&mut db.keys().copied().filter(|k| !da.contains_key(k))),
+        only_a: sorted(&canon, da.keys().copied().filter(|k| !db.contains_key(k))),
+        only_b: sorted(&canon, db.keys().copied().filter(|k| !da.contains_key(k))),
         differ,
-        dups: (names(&mut pa.into_iter()), names(&mut pb.into_iter())),
+        dups: (
+            sorted(&canon, pa.into_iter()),
+            sorted(&canon, pb.into_iter()),
+        ),
     })
+}
+
+/// Whether a target states the same thing in both exports.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Its statement cone is stated alike in both.
+    Kept,
+    /// These declarations in its statement cone are stated differently or missing in `b`.
+    Changed(Vec<String>),
+    /// Not in `a`.
+    Missing,
+}
+
+/// How two builds of a cone differ, statements apart from proofs. Every list is sorted.
+#[derive(Debug, Default)]
+pub struct Drift {
+    pub decls: (usize, usize),
+    pub same: usize,
+    /// Stated alike, proved differently.
+    pub proofs: Vec<String>,
+    /// Stated differently, with what differs first.
+    pub statements: Vec<(String, &'static str)>,
+    /// Names only in `a` and only in `b` whose declarations are alike but for the name.
+    pub renamed: Vec<(String, String)>,
+    pub removed: Vec<String>,
+    pub added: Vec<String>,
+    pub targets: Vec<(String, Verdict)>,
+}
+
+const PROOF: u32 = u32::MAX;
+
+/// `d` with the values of theorems and opaques left out, which nothing else can unfold.
+fn stated(d: &Decl) -> Decl {
+    let mut d = d.clone();
+    if let Decl::Thm { value, .. } | Decl::Opaque { value, .. } = &mut d {
+        *value = PROOF;
+    }
+    d
+}
+
+/// The statement of a declaration other than an inductive, without its name.
+fn shape(d: &Decl) -> Option<Decl> {
+    let mut d = stated(d);
+    match &mut d {
+        Decl::Inductive { .. } => return None,
+        Decl::Def { head, all, .. } | Decl::Thm { head, all, .. } => {
+            head.name = PROOF;
+            all.clear();
+        }
+        Decl::Axiom { head, .. } | Decl::Opaque { head, .. } | Decl::Quot { head, .. } => {
+            head.name = PROOF;
+        }
+    }
+    Some(d)
+}
+
+/// What a declaration's statement mentions: every term but the values of theorems and
+/// opaques.
+fn statement_terms(d: &Decl) -> Vec<u32> {
+    match d {
+        Decl::Axiom { head, .. }
+        | Decl::Quot { head, .. }
+        | Decl::Thm { head, .. }
+        | Decl::Opaque { head, .. } => vec![head.ty],
+        Decl::Def { head, value, .. } => vec![head.ty, *value],
+        Decl::Inductive { types, ctors, recs } => types
+            .iter()
+            .map(|t| t.head.ty)
+            .chain(ctors.iter().map(|c| c.head.ty))
+            .chain(recs.iter().map(|r| r.head.ty))
+            .chain(recs.iter().flat_map(|r| r.rules.iter().map(|u| u.rhs)))
+            .collect(),
+    }
+}
+
+/// The first names of the declarations the statement of `t` rests on, `t` included.
+fn statement_cone(canon: &Canon, decls: &FxHashMap<u32, Decl>, t: u32) -> Vec<u32> {
+    let mut owner = FxHashMap::default();
+    for (&k, d) in decls {
+        if let Decl::Inductive { types, ctors, recs } = d {
+            let heads = types
+                .iter()
+                .map(|t| &t.head)
+                .chain(ctors.iter().map(|c| &c.head))
+                .chain(recs.iter().map(|r| &r.head));
+            heads.for_each(|h| {
+                owner.insert(h.name, k);
+            });
+        }
+    }
+    let first = |n: u32| owner.get(&n).copied().unwrap_or(n);
+    let (mut out, mut seen, mut exprs) = (Vec::new(), FxHashSet::default(), FxHashSet::default());
+    let mut todo = vec![t];
+    while let Some(c) = todo.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        out.push(c);
+        let Some(d) = decls.get(&c) else { continue };
+        let mut terms = statement_terms(d);
+        while let Some(e) = terms.pop() {
+            if !exprs.insert(e) {
+                continue;
+            }
+            match canon.get(e) {
+                Key::Const(n, _) => todo.push(first(n)),
+                Key::Proj(n, _, x) => {
+                    todo.push(first(n));
+                    terms.push(x);
+                }
+                Key::App(x, y) | Key::Lam(x, y) | Key::Pi(x, y) => terms.extend([x, y]),
+                Key::Let(x, y, z, _) => terms.extend([x, y, z]),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Compare two builds of a cone, each exported as NDJSON or blean, and say for each of
+/// `targets` whether its statement was kept exactly.
+pub fn drift(a: &[u8], b: &[u8], targets: &[String]) -> Result<Drift> {
+    let canon = Canon::new();
+    let ((da, ca, _), (db, cb, _)) = load_both(&canon, a, b)?;
+    let mut d = Drift {
+        decls: (ca, cb),
+        ..Drift::default()
+    };
+    for (k, x) in &da {
+        let Some(y) = db.get(k) else { continue };
+        if x == y {
+            d.same += 1;
+        } else if stated(x) == stated(y) {
+            d.proofs.push(canon.name(*k));
+        } else {
+            d.statements.push((canon.name(*k), what(x, y)));
+        }
+    }
+    let gone = |from: &FxHashMap<u32, Decl>, to: &FxHashMap<u32, Decl>| {
+        let mut by: FxHashMap<Option<Vec<u8>>, Vec<u32>> = FxHashMap::default();
+        for (k, x) in from.iter().filter(|(k, _)| !to.contains_key(k)) {
+            let s = shape(x).and_then(|s| postcard::to_allocvec(&s).ok());
+            by.entry(s).or_default().push(*k);
+        }
+        by
+    };
+    let (mut ga, mut gb) = (gone(&da, &db), gone(&db, &da));
+    let pairs: Vec<_> = ga
+        .iter()
+        .filter(|(s, v)| s.is_some() && v.len() == 1 && gb.get(*s).is_some_and(|w| w.len() == 1))
+        .map(|(s, _)| s.clone())
+        .collect();
+    for s in pairs {
+        let (x, y) = (
+            ga.remove(&s).unwrap_or_default(),
+            gb.remove(&s).unwrap_or_default(),
+        );
+        d.renamed.push((canon.name(x[0]), canon.name(y[0])));
+    }
+    d.removed = sorted(&canon, ga.into_values().flatten());
+    d.added = sorted(&canon, gb.into_values().flatten());
+    d.proofs.sort_unstable();
+    d.statements.sort_unstable();
+    d.renamed.sort_unstable();
+    let names: FxHashMap<String, u32> = da.keys().map(|&k| (canon.name(k), k)).collect();
+    for t in targets {
+        let v = names.get(t).map_or(Verdict::Missing, |&k| {
+            let changed: Vec<u32> = statement_cone(&canon, &da, k)
+                .into_iter()
+                .filter(|c| match (da.get(c), db.get(c)) {
+                    (Some(x), Some(y)) => stated(x) != stated(y),
+                    (x, _) => x.is_some(),
+                })
+                .collect();
+            if changed.is_empty() {
+                Verdict::Kept
+            } else {
+                let gone = |n: String| {
+                    if names.get(&n).is_some_and(|k| db.contains_key(k)) {
+                        n
+                    } else {
+                        format!("{n} (removed)")
+                    }
+                };
+                Verdict::Changed(
+                    sorted(&canon, changed.into_iter())
+                        .into_iter()
+                        .map(gone)
+                        .collect(),
+                )
+            }
+        });
+        d.targets.push((t.clone(), v));
+    }
+    Ok(d)
 }

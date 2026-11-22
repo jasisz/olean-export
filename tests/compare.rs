@@ -53,3 +53,41 @@ fn reports_differences() {
     let d = compare(&top, &cone).unwrap();
     assert!(!d.only_a.is_empty() && d.only_b.is_empty() && d.differ.is_empty());
 }
+
+/// The fixtures against their edits in `cases/edit`, and a rename made by hand.
+#[test]
+fn drift_tells_statements_from_names() {
+    use olean_export::compare::{drift, Verdict};
+    let load = |dirs: &[&str]| {
+        let dirs: Vec<PathBuf> = dirs.iter().map(|d| cases().join(d)).collect();
+        export(
+            &Env::load(&dirs, &["Top"]).unwrap(),
+            Ndjson::new(Vec::new()),
+            &[],
+        )
+    };
+    let a = load(&["build"]);
+    let b = load(&["build/edit", "build"]);
+    let targets = ["N.add_zero", "two", "letty", "nope"].map(String::from);
+    let d = drift(&a, &b, &targets).unwrap();
+    assert_eq!(d.statements, [("two".to_owned(), "value")]);
+    assert_eq!(
+        (d.removed, d.added),
+        (vec!["letty".to_owned()], vec!["three".to_owned()])
+    );
+    assert!(d.proofs.is_empty() && d.renamed.is_empty());
+    let v: Vec<&Verdict> = d.targets.iter().map(|(_, v)| v).collect();
+    assert_eq!(v[0], &Verdict::Kept);
+    assert_eq!(v[1], &Verdict::Changed(vec!["two".into()]));
+    assert_eq!(v[2], &Verdict::Changed(vec!["letty (removed)".into()]));
+    assert_eq!(v[3], &Verdict::Missing);
+
+    let text = String::from_utf8(a.clone()).unwrap();
+    let renamed = text.replace(r#""str":"add_zero""#, r#""str":"add_zero'""#);
+    let d = drift(&a, renamed.as_bytes(), &[]).unwrap();
+    assert_eq!(
+        d.renamed,
+        [("N.add_zero".to_owned(), "N.add_zero'".to_owned())]
+    );
+    assert!(d.statements.is_empty() && d.removed.is_empty() && d.added.is_empty());
+}

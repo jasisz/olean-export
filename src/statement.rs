@@ -40,14 +40,7 @@ pub fn report(
     out: &mut dyn Write,
 ) -> Result<()> {
     let cone = env.statement(roots)?;
-    let trusted = |m: usize| {
-        let m = &env.modules[m];
-        trust.iter().any(|t| {
-            m == t
-                || m.strip_prefix(t.as_str())
-                    .is_some_and(|r| r.starts_with('.'))
-        })
-    };
+    let trusted = |m: usize| trusted(&env.modules[m], trust);
     // constructors and recursors print with their inductive
     let listed = |&(_, c): &(usize, NameId)| {
         !roots.contains(&c) && !matches!(env.consts[&c].kind, Kind::Ctor(_) | Kind::Rec(_))
@@ -105,19 +98,34 @@ pub fn report(
         if let Entry::Vacant(e) = lines.entry(m) {
             e.insert(ranges(&resolve(search, module)?)?);
         }
-        let file = format!("{}.lean", module.replace('.', "/"));
-        let at = match lines[&m].get(&env.display(c)) {
-            Some((a, b)) if a == b => format!("{file}:{a}"),
-            Some((a, b)) => format!("{file}:{a}-{b}"),
-            None => file,
-        };
+        let at = at(module, lines[&m].get(&env.display(c)).copied());
         writeln!(out, "\n-- {at}\n{}", p.decl(c))?;
     }
     Ok(())
 }
 
+/// Whether a name in `trust` is `module` or a prefix of it.
+pub(crate) fn trusted(module: &str, trust: &[String]) -> bool {
+    trust.iter().any(|t| {
+        module == t
+            || module
+                .strip_prefix(t.as_str())
+                .is_some_and(|r| r.starts_with('.'))
+    })
+}
+
+/// `File.lean:a-b`, the source file of `module` and a line range in it.
+pub(crate) fn at(module: &str, lines: Option<(u64, u64)>) -> String {
+    let file = format!("{}.lean", module.replace('.', "/"));
+    match lines {
+        Some((a, b)) if a == b => format!("{file}:{a}"),
+        Some((a, b)) => format!("{file}:{a}-{b}"),
+        None => file,
+    }
+}
+
 /// The first and last source line of each declaration of a module, from `declRangeExt`.
-fn ranges(path: &Path) -> Result<FxHashMap<String, (u64, u64)>> {
+pub(crate) fn ranges(path: &Path) -> Result<FxHashMap<String, (u64, u64)>> {
     let img = Image::open_module(path)?;
     let mut out = FxHashMap::default();
     for e in img.array(img.field(img.root, 4)?)? {
