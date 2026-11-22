@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-11-22)
 
 - Ship Linux and macOS release binaries.
 - Add `unused`, what a cone leaves unused.
