@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- `axioms --trust` decodes only proofs reached.
-- Add `Env::load_outside`, cone outside trusted modules.
+- `unused` and `axioms` read terms on demand.
+- Add `deps`, what each declaration names, as NDJSON.
+- Add `Graph`, a lazy constant reference graph.
 - `unused` drops Mathlib and compiler bookkeeping tags.
 
 ## 0.8.0 (2026-11-22)

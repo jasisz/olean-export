@@ -28,9 +28,9 @@ pub mod statement;
 
 pub use compare::{compare, Diff};
 pub use env::{
-    resolve, search_path, Binder, Body, Const, Ctor, Defn, Env, Expr, ExprId, Exprs, Hints, Id,
-    Inductive, Kind, LetNode, Level, LevelId, Name, NameId, QuotKind, Rec, Reload, Rule, Table,
-    Theorem, Univs, UnivsId, ANON, ZERO,
+    resolve, search_path, Binder, Body, Const, Ctor, Defn, Env, Expr, ExprId, Exprs, Graph, Hints,
+    Id, Inductive, Kind, LetNode, Level, LevelId, Name, NameId, Node, QuotKind, Rec, Refs, Reload,
+    Rule, Shape, Table, Theorem, Univs, UnivsId, ANON, ZERO,
 };
 pub use error::{Error, Result};
 pub use export::{Exporter, Mark};

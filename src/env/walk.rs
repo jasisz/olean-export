@@ -112,24 +112,6 @@ impl Env {
         Ok(env)
     }
 
-    /// Like [`Env::load_cone`] of every constant outside the `trust` modules, or modules
-    /// under them.
-    pub fn load_outside(
-        search: &[PathBuf],
-        roots: &[&str],
-        trust: &[String],
-        jobs: usize,
-        progress: &(dyn Fn(usize, usize) + Sync),
-    ) -> Result<Self> {
-        let mut env = Self::build(search, roots, jobs, progress, true, true)?;
-        let todo = (0..env.modules.len())
-            .filter(|&m| !crate::statement::trusted(&env.modules[m], trust))
-            .flat_map(|m| env.module_consts(m).iter().map(|&c| Dep::Const(c)))
-            .collect();
-        env.decode_cone(todo)?;
-        Ok(env)
-    }
-
     /// Decode the theorem values a full walk from `todo` reaches, round by round.
     fn decode_cone(&mut self, mut todo: Vec<Dep>) -> Result<()> {
         let mut live = self.live.take().expect("built live");

@@ -8,7 +8,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     inspect::Import,
-    olean::Header,
+    olean::{Header, Image},
 };
 use hashbrown::HashTable;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -98,7 +98,7 @@ impl Env {
 
     fn reload_with(&mut self, live: &mut Live) -> Result<Reload> {
         let roots: Vec<&str> = live.roots.iter().map(String::as_str).collect();
-        let found = discover_all(&live.search, &roots)?;
+        let found = discover_all(&live.search, &roots, Image::open)?;
         let stamps: Vec<Stamp> = found.iter().map(|(_, p)| stamp(p)).collect();
         let fresh: Vec<(usize, &Path)> = {
             let prev: FxHashMap<&str, &Stamp> = live

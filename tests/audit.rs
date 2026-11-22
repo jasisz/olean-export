@@ -1,18 +1,25 @@
 use olean_export::{
     audit::{self, Axioms},
-    Env,
+    Env, Graph,
 };
 use std::path::PathBuf;
 
-fn env(dirs: &[&str]) -> Env {
+fn dirs(dirs: &[&str]) -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases");
-    let dirs: Vec<PathBuf> = dirs.iter().map(|d| root.join(d)).collect();
-    Env::load(&dirs, &["Top"]).unwrap()
+    dirs.iter().map(|d| root.join(d)).collect()
 }
 
-fn run(env: &Env, f: impl FnOnce(&Env, &mut Vec<u8>)) -> String {
+fn env(d: &[&str]) -> Env {
+    Env::load(&dirs(d), &["Top"]).unwrap()
+}
+
+fn graph(root: &str) -> Graph {
+    Graph::load(&dirs(&["build"]), &[root], 1).unwrap()
+}
+
+fn run(g: &mut Graph, f: impl FnOnce(&mut Graph, &mut Vec<u8>)) -> String {
     let mut out = Vec::new();
-    f(env, &mut out);
+    f(g, &mut out);
     String::from_utf8(out).unwrap()
 }
 
@@ -36,47 +43,49 @@ fn digest_follows_the_cone() {
 
 #[test]
 fn unused_lists_what_the_cone_misses() {
-    let e = env(&["build"]);
-    let two = e.find_name("two").unwrap();
-    let path = [PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases/build")];
-    let s = run(&e, |e, out| {
-        audit::unused(e, &path, &[two], &[], out).unwrap();
-    });
+    let mut g = graph("Top");
+    let two = g.find_name("two").unwrap();
+    let s = run(&mut g, |g, out| audit::unused(g, &[two], &[], out).unwrap());
     assert!(s.contains("Top.lean:16-18 letty\n"), "{s}");
     assert!(!s.contains(" two") && !s.contains(" N.add\n"), "{s}");
 }
 
 #[test]
 fn axioms_by_query() {
-    let e = env(&["build"]);
+    let mut g = graph("Top");
     let uses = ["choice".to_owned()];
     let q = Axioms {
         uses: &uses,
         why: true,
         ..Axioms::default()
     };
-    let s = run(&e, |e, out| audit::axioms(e, &[], &[], &q, out).unwrap());
+    let s = run(&mut g, |g, out| {
+        audit::axioms(g, &[], &[], &q, out).unwrap();
+    });
     assert_eq!(s, "-- 1 declarations; by axiom: choice 1\nchoice: choice\n");
     let only = Axioms {
         only: Some(&uses),
         ..Axioms::default()
     };
-    let s = run(&e, |e, out| audit::axioms(e, &[], &[], &only, out).unwrap());
+    let s = run(&mut g, |g, out| {
+        audit::axioms(g, &[], &[], &only, out).unwrap();
+    });
     assert_eq!(s, "-- 0 declarations; by axiom: \n");
 }
 
-/// Outside the trusted modules every proof is decoded, inside only those reached.
+/// Outside the trusted modules every proof is read, inside only those reached.
 #[test]
-fn load_outside_skips_unreached_proofs() {
-    use olean_export::Kind;
-    let dir = [PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases/build")];
-    let loaded = |root: &str, trust: &[&str]| {
+fn axioms_read_only_reached_proofs() {
+    let read = |root: &str, trust: &[&str]| {
         let trust: Vec<String> = trust.iter().map(|&t| t.to_owned()).collect();
-        let e = Env::load_outside(&dir, &[root], &trust, 1, &|_, _| {}).unwrap();
-        let c = &e.consts[&e.find_name("N.add_zero").unwrap()];
-        matches!(&c.kind, Kind::Thm(t) if t.value.is_some())
+        let mut g = graph(root);
+        run(&mut g, |g, out| {
+            audit::axioms(g, &[], &trust, &Axioms::default(), out).unwrap();
+        });
+        let n = g.find_name("N.add_zero").unwrap();
+        g.refs(g.position(n).unwrap()).is_some()
     };
-    assert!(!loaded("Top", &["Base"]));
-    assert!(loaded("Pinned", &["Base"]));
-    assert!(loaded("Top", &[]));
+    assert!(!read("Top", &["Base"]));
+    assert!(read("Pinned", &["Base"]));
+    assert!(read("Top", &[]));
 }

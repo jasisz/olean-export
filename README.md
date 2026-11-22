@@ -13,6 +13,7 @@ It is designed for massive developments (multimillion-line proof libraries), whe
 - Closure keys and accepted store for incremental checking
 - `inspect` and `compare` for oleans and exports
 - `unused`, `axioms` and `digest` for auditing a theorem's cone
+- `deps`, a lazily read reference graph for huge proofs
 
 The object layout is tied to the Lean release. This version reads olean format v2 as written by Lean 4.26 through 4.36, and refuses files from any other release.
 
@@ -78,15 +79,20 @@ lake env olean-export statement FLT -c THEOREM --trust Init,Std,Lean,Mathlib
 
 `unused -c NAME` lists what the full cone of `NAME` leaves unused, outside `--trust` modules: whole files, then each declaration with its source range. A tag lists the attributes that mention it, like `instance` or `simp`, which may use it only while elaborating.
 
-`axioms` prints the axioms each declaration rests on, as `#print axioms` collects them, for the cone of `-c NAME` or all loaded modules outside `--trust`. Only the trusted proofs they reach are decoded. `--uses AXIOMS` keeps declarations resting on one of them, `--only AXIOMS` those resting on anything else, and `--why` shows a chain down to the axiom.
+`axioms` prints the axioms each declaration rests on, as `#print axioms` collects them, for the cone of `-c NAME` or all loaded modules outside `--trust`. `--uses AXIOMS` keeps declarations resting on one of them, `--only AXIOMS` those resting on anything else, and `--why` shows a chain down to the axiom.
 
 `digest -c NAME` prints two closure keys: one for the statement cone, one for the full cone. They ignore ids, record order, paths and the exporter, so they make a stable receipt for a build.
+
+`deps` writes one NDJSON line per declaration with the constants its terms name, for the cone of `-c NAME` or all modules outside `--trust`. `--modules` writes one line per module instead, counting references into each module.
+
+`unused`, `axioms` and `deps` are lazy. They map the oleans without reading them in, catalog only names and kinds, and read only the terms the question reaches. Terms are never decoded, so memory stays small on proofs far larger than RAM.
 
 ```bash
 lake env olean-export unused RH -c riemannHypothesis --trust Init,Std,Lean,Mathlib
 lake env olean-export axioms RH -c riemannHypothesis --uses Classical.choice --why
 lake env olean-export axioms Mathlib --trust Init,Std,Lean --only propext,Quot.sound
 lake env olean-export digest RH -c riemannHypothesis
+lake env olean-export deps RH -c riemannHypothesis --modules
 ```
 
 ## Incremental

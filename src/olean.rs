@@ -61,39 +61,65 @@ fn cstr(b: &[u8]) -> String {
 }
 
 impl Image {
+    /// Map `path` and read all of it in now, for decoding every object.
     pub(crate) fn open(path: &Path) -> Result<Self> {
+        Self::open_as(path, true)
+    }
+
+    /// Map `path` and read in only the pages touched, for reading a few objects.
+    pub(crate) fn peek(path: &Path) -> Result<Self> {
+        Self::open_as(path, false)
+    }
+
+    fn open_as(path: &Path, eager: bool) -> Result<Self> {
         let mut img = Self {
             parts: Vec::new(),
             header: Header::default(),
             root: 0,
             public: 0,
         };
-        img.push_part(path)?;
+        img.push_part(path, eager)?;
         Ok(img)
     }
 
     /// Open a module's `.olean`, adding its `.server` and `.private` parts if it is in the
     /// module system. The root is then the private part's, which sees all of them.
     pub(crate) fn open_module(path: &Path) -> Result<Self> {
-        let mut img = Self::open(path)?;
+        Self::module_as(path, true)
+    }
+
+    /// [`Image::open_module`] as [`Image::peek`] maps.
+    pub(crate) fn peek_module(path: &Path) -> Result<Self> {
+        Self::module_as(path, false)
+    }
+
+    fn module_as(path: &Path, eager: bool) -> Result<Self> {
+        let mut img = Self::open_as(path, eager)?;
         if img.scalar_u8(img.root, 0).map_err(at(path))? == 1 {
-            img.push_part(&path.with_extension("olean.server"))?;
-            img.push_part(&path.with_extension("olean.private"))?;
+            img.push_part(&path.with_extension("olean.server"), eager)?;
+            img.push_part(&path.with_extension("olean.private"), eager)?;
         }
         Ok(img)
     }
 
-    pub(crate) fn push_part(&mut self, path: &Path) -> Result<()> {
-        self.map(path).map_err(at(path))
+    fn push_part(&mut self, path: &Path, eager: bool) -> Result<()> {
+        self.map(path, eager).map_err(at(path))
     }
 
-    fn map(&mut self, path: &Path) -> Result<()> {
+    fn map(&mut self, path: &Path, eager: bool) -> Result<()> {
         let file = File::open(path)?;
         // SAFETY: the map is read-only and lives as long as `self`. Rewriting an .olean while
         // it is being read is undefined behaviour, the same assumption Lean makes when it maps them.
         #[allow(unsafe_code)]
-        let bytes = unsafe { MmapOptions::new().populate().map(&file)? };
-        bytes.advise(memmap2::Advice::WillNeed)?;
+        let bytes = if eager {
+            let b = unsafe { MmapOptions::new().populate().map(&file)? };
+            b.advise(memmap2::Advice::WillNeed)?;
+            b
+        } else {
+            let b = unsafe { MmapOptions::new().map(&file)? };
+            b.advise(memmap2::Advice::Random)?;
+            b
+        };
         if bytes.len() < 96 || &bytes[..5] != b"olean" {
             return Err(Error::NotOlean);
         }

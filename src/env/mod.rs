@@ -1,9 +1,11 @@
 mod decode;
+mod graph;
 mod reload;
 mod table;
 mod term;
 mod walk;
 
+pub use graph::{Graph, Node, Refs, Shape};
 pub use reload::Reload;
 pub use table::{Exprs, Table};
 pub use term::{
@@ -96,11 +98,13 @@ pub(crate) fn escape(s: &str) -> Cow<'_, str> {
     }
 }
 
-fn discover_all(search: &[PathBuf], roots: &[&str]) -> Result<Vec<(String, PathBuf)>> {
+type Open = fn(&Path) -> Result<Image>;
+
+fn discover_all(search: &[PathBuf], roots: &[&str], open: Open) -> Result<Vec<(String, PathBuf)>> {
     let mut seen = FxHashSet::default();
     let mut found = Vec::new();
     for root in roots {
-        discover(search, root, &mut seen, &mut found)?;
+        discover(search, root, open, &mut seen, &mut found)?;
     }
     Ok(found)
 }
@@ -109,6 +113,7 @@ fn discover_all(search: &[PathBuf], roots: &[&str]) -> Result<Vec<(String, PathB
 fn discover(
     search: &[PathBuf],
     module: &str,
+    open: Open,
     seen: &mut FxHashSet<String>,
     out: &mut Vec<(String, PathBuf)>,
 ) -> Result<()> {
@@ -116,11 +121,11 @@ fn discover(
         return Ok(());
     }
     let path = resolve(search, module)?;
-    let img = Image::open(&path)?;
+    let img = open(&path)?;
     let imports = img.imports().map_err(at(&path))?;
     drop(img);
     for import in &imports {
-        discover(search, &import.module, seen, out)?;
+        discover(search, &import.module, open, seen, out)?;
     }
     out.push((module.to_owned(), path));
     Ok(())
@@ -176,7 +181,7 @@ impl Env {
         live: bool,
         lazy: bool,
     ) -> Result<Self> {
-        let found = discover_all(search, roots)?;
+        let found = discover_all(search, roots, Image::open)?;
         let stamps: Vec<Stamp> = found.iter().map(|(_, p)| stamp(p)).collect();
         // Sizing the tables up front avoids rehashing them while they grow. Across Lean and
         // Mathlib there is about one expression per 64 bytes of olean and one name per 1200.
@@ -294,6 +299,30 @@ impl Env {
     /// without interning it.
     #[must_use]
     pub fn find_name(&self, dotted: &str) -> Option<NameId> {
+        self.names.find(dotted)
+    }
+
+    /// `n` as Lean reads it back: components that are not plain identifiers, or are
+    /// keywords, go in `«»`.
+    #[must_use]
+    pub fn display(&self, n: NameId) -> String {
+        self.names.join(n, true)
+    }
+
+    /// `n` with its components joined as they are, as `declRangeExt` keys it.
+    pub(crate) fn dotted(&self, n: NameId) -> String {
+        self.names.join(n, false)
+    }
+
+    #[must_use]
+    pub fn is_internal(&self, n: NameId) -> bool {
+        self.names.is_internal(n)
+    }
+}
+
+impl Table<Name> {
+    /// The id of a dotted name as [`Env::display`] writes it, if it was interned.
+    pub(crate) fn find(&self, dotted: &str) -> Option<NameId> {
         let (mut pre, mut rest) = (ANON, dotted);
         loop {
             let (n, tail) = if let Some(r) = rest.strip_prefix('«') {
@@ -313,7 +342,7 @@ impl Env {
                     .map_or_else(|_| Name::Str(pre, s.into()), |i| Name::Num(pre, i));
                 (n, tail)
             };
-            pre = self.names.get(&n)?;
+            pre = self.get(&n)?;
             match tail.strip_prefix('.') {
                 Some(t) => rest = t,
                 None => return tail.is_empty().then_some(pre),
@@ -321,20 +350,8 @@ impl Env {
         }
     }
 
-    /// `n` as Lean reads it back: components that are not plain identifiers, or are
-    /// keywords, go in `«»`.
-    #[must_use]
-    pub fn display(&self, n: NameId) -> String {
-        self.join(n, true)
-    }
-
-    /// `n` with its components joined as they are, as `declRangeExt` keys it.
-    pub(crate) fn dotted(&self, n: NameId) -> String {
-        self.join(n, false)
-    }
-
-    fn join(&self, n: NameId, escaped: bool) -> String {
-        let (pre, last) = match &self.names[n] {
+    pub(crate) fn join(&self, n: NameId, escaped: bool) -> String {
+        let (pre, last) = match &self[n] {
             Name::Anon => return String::new(),
             Name::Str(p, s) if escaped => (*p, escape(s).into_owned()),
             Name::Str(p, s) => (*p, s.to_string()),
@@ -346,9 +363,8 @@ impl Env {
         }
     }
 
-    #[must_use]
-    pub fn is_internal(&self, n: NameId) -> bool {
-        match &self.names[n] {
+    pub(crate) fn is_internal(&self, n: NameId) -> bool {
+        match &self[n] {
             Name::Anon => false,
             Name::Str(p, s) => s.starts_with('_') || self.is_internal(*p),
             Name::Num(p, _) => self.is_internal(*p),

@@ -5,7 +5,7 @@ use olean_export::{
     join::{join_in, meta, order, split_each, view},
     key::Keys,
     ndjson::{self, Ndjson},
-    resolve, search_path, statement, Env, Exporter, NameId, Sink, Summary,
+    resolve, search_path, statement, Env, Exporter, Graph, NameId, Sink, Summary,
 };
 use std::{
     cell::Cell,
@@ -203,6 +203,23 @@ enum Command {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
     },
+    /// Write what each declaration's terms name, as NDJSON
+    Deps {
+        #[arg(required = true, value_name = "MODULE")]
+        modules: Vec<String>,
+        /// Only the cone of these constants (repeatable)
+        #[arg(short, long = "const", value_name = "NAME")]
+        consts: Vec<String>,
+        /// Leave out modules named or prefixed by these, e.g. `Init,Std,Mathlib`
+        #[arg(short, long, value_delimiter = ',', value_name = "MODULES")]
+        trust: Vec<String>,
+        /// One line per module, counting references into each module
+        #[arg(long = "modules")]
+        by_module: bool,
+        /// Write to FILE instead of stdout
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
     /// Print closure keys of theorems' statement cones and full cones
     Digest {
         #[arg(required = true, value_name = "MODULE")]
@@ -254,14 +271,9 @@ fn main() -> ExitCode {
             consts,
             trust,
             output,
-        }) => audit(
-            &cli,
-            modules,
-            consts,
-            trust,
-            output.as_ref(),
-            |env, search, roots, out| olean_export::audit::unused(env, search, roots, trust, out),
-        ),
+        }) => graph(&cli, modules, consts, output.as_ref(), |g, roots, out| {
+            olean_export::audit::unused(g, roots, trust, out)
+        }),
         Some(Command::Axioms {
             modules,
             consts,
@@ -270,21 +282,23 @@ fn main() -> ExitCode {
             only,
             why,
             output,
-        }) => audit(
-            &cli,
+        }) => graph(&cli, modules, consts, output.as_ref(), |g, roots, out| {
+            let q = olean_export::audit::Axioms {
+                uses,
+                only: only.as_deref(),
+                why: *why,
+            };
+            olean_export::audit::axioms(g, roots, trust, &q, out)
+        }),
+        Some(Command::Deps {
             modules,
             consts,
             trust,
-            output.as_ref(),
-            |env, _, roots, out| {
-                let q = olean_export::audit::Axioms {
-                    uses,
-                    only: only.as_deref(),
-                    why: *why,
-                };
-                olean_export::audit::axioms(env, roots, trust, &q, out)
-            },
-        ),
+            by_module,
+            output,
+        }) => graph(&cli, modules, consts, output.as_ref(), |g, roots, out| {
+            olean_export::audit::deps(g, roots, trust, *by_module, out)
+        }),
         Some(Command::Digest { modules, consts }) => digest(&cli, modules, consts),
         Some(Command::Join {
             files,
@@ -756,26 +770,18 @@ fn drift(a: &PathBuf, b: &PathBuf, limit: usize, targets: &[String]) -> Res {
     }
 }
 
-/// Load the cone of `consts`, or every module when there are none, and run `f` on it with a
-/// stack deep enough for any term.
+/// Load the cone of `consts` and run `f` on it with a stack deep enough for any term.
 fn audit(
     cli: &Cli,
     modules: &[String],
     consts: &[String],
-    trust: &[String],
     output: Option<&PathBuf>,
-    f: impl FnOnce(&Env, &[PathBuf], &[NameId], &mut dyn Write) -> olean_export::Result<()> + Send,
+    f: impl FnOnce(&Env, &[NameId], &mut dyn Write) -> olean_export::Result<()> + Send,
 ) -> Res {
     let search = search(cli)?;
     let roots: Vec<&str> = modules.iter().map(String::as_str).collect();
     let names: Vec<&str> = consts.iter().map(String::as_str).collect();
-    let env = if names.is_empty() && trust.is_empty() {
-        Env::load_with(&search, &roots, jobs(cli), &|_, _| {})?
-    } else if names.is_empty() {
-        Env::load_outside(&search, &roots, trust, jobs(cli), &|_, _| {})?
-    } else {
-        Env::load_cone(&search, &roots, &names, jobs(cli), &|_, _| {})?
-    };
+    let env = Env::load_cone(&search, &roots, &names, jobs(cli), &|_, _| {})?;
     let targets = consts
         .iter()
         .map(|n| {
@@ -785,9 +791,31 @@ fn audit(
         .collect::<Result<Vec<_>, _>>()?;
     deep(|| {
         let mut out = out(output)?;
-        f(&env, &search, &targets, &mut out)?;
+        f(&env, &targets, &mut out)?;
         Ok(out.flush()?)
     })
+}
+
+/// Catalog `modules` and run `f` on the graph with the constants `consts` names.
+fn graph(
+    cli: &Cli,
+    modules: &[String],
+    consts: &[String],
+    output: Option<&PathBuf>,
+    f: impl FnOnce(&mut Graph, &[NameId], &mut dyn Write) -> olean_export::Result<()>,
+) -> Res {
+    let roots: Vec<&str> = modules.iter().map(String::as_str).collect();
+    let mut g = Graph::load(&search(cli)?, &roots, jobs(cli))?;
+    let targets = consts
+        .iter()
+        .map(|n| {
+            g.find_name(n)
+                .ok_or_else(|| format!("unknown constant {n}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out = out(output)?;
+    f(&mut g, &targets, &mut out)?;
+    Ok(out.flush()?)
 }
 
 fn deep<T: Send>(
@@ -804,7 +832,7 @@ fn deep<T: Send>(
 }
 
 fn digest(cli: &Cli, modules: &[String], consts: &[String]) -> Res {
-    audit(cli, modules, consts, &[], None, |env, _, roots, out| {
+    audit(cli, modules, consts, None, |env, roots, out| {
         for d in olean_export::audit::digest(env, roots)? {
             for (what, (key, n)) in [("statement", d.statement), ("full", d.full)] {
                 let key = key.map_or_else(|| "-".repeat(64), |k| hex(&k));

@@ -2,15 +2,16 @@
 //! and closure keys of its statement and of the whole of it.
 
 use crate::{
-    env::{resolve, Builtins, Dep, Env, ExprId, Kind, NameId},
-    error::{corrupt, Result},
+    env::{Env, Graph, NameId, Shape},
+    error::{corrupt, Error, Result},
     export::Exporter,
     key::{Key, Keys},
     olean::{is_scalar, Image},
     statement::{at, ranges, trusted},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::{fmt::Write as _, io::Write, path::PathBuf};
+use serde_json::json;
+use std::{fmt::Write as _, io::Write};
 
 /// The closure keys of a constant: of its statement cone, theorems taken as stated, and of
 /// its full cone, with the number of declarations in each.
@@ -54,28 +55,27 @@ pub fn digest(env: &Env, roots: &[NameId]) -> Result<Vec<Digest>> {
 /// not, with the attributes and extensions that mention it, which may use it while
 /// elaborating.
 pub fn unused(
-    env: &Env,
-    search: &[PathBuf],
+    g: &mut Graph,
     roots: &[NameId],
     trust: &[String],
     out: &mut dyn Write,
 ) -> Result<()> {
-    let used: FxHashSet<NameId> = env.cone(roots)?.into_iter().map(|(_, c)| c).collect();
+    let used = g.reach(roots)?;
     let (mut empty, mut lines, mut total) = (Vec::new(), Vec::new(), 0);
-    for (m, module) in env.modules.iter().enumerate() {
-        let consts = env.module_consts(m);
-        if trusted(module, trust) || consts.is_empty() {
+    for (m, module) in g.modules.iter().enumerate() {
+        let nodes = &g.nodes[g.module_nodes(m)];
+        if trusted(module, trust) || nodes.is_empty() {
             continue;
         }
-        let path = resolve(search, module)?;
-        let spans = ranges(&path)?;
-        let own: Vec<(NameId, (u64, u64))> = consts
+        let path = &g.paths[m];
+        let spans = ranges(path)?;
+        let own: Vec<(NameId, (u64, u64))> = nodes
             .iter()
-            .filter(|&&c| !matches!(env.consts[&c].kind, Kind::Ctor(_) | Kind::Rec(_)))
-            .filter_map(|&c| Some((c, *spans.get(&env.display(c))?)))
+            .filter(|n| !matches!(n.shape, Shape::Ctor { .. } | Shape::Rec { .. }))
+            .filter_map(|n| Some((n.name, *spans.get(&g.display(n.name))?)))
             .collect();
         total += own.len();
-        if !consts.iter().any(|c| used.contains(c)) {
+        if !nodes.iter().any(|n| used.contains(&n.name)) {
             empty.push((at(module, None), own.len()));
             continue;
         }
@@ -84,10 +84,10 @@ pub fn unused(
         if idle.is_empty() {
             continue;
         }
-        let names: FxHashSet<String> = idle.iter().map(|&(c, _)| env.display(c)).collect();
-        let tags = tags(&Image::open_module(&path)?, &names)?;
+        let names: FxHashSet<String> = idle.iter().map(|&(c, _)| g.display(c)).collect();
+        let tags = tags(&Image::peek_module(path)?, &names)?;
         for (c, span) in idle {
-            let name = env.display(c);
+            let name = g.display(c);
             let tag = tags
                 .get(&name)
                 .map_or_else(String::new, |t| format!(" [{}]", t.join(", ")));
@@ -228,15 +228,15 @@ pub struct Axioms<'a> {
 /// Print the axioms each declaration rests on, as `#print axioms` collects them: the cone
 /// of `roots`, or the whole environment without roots, outside the modules `trust` names.
 pub fn axioms(
-    env: &Env,
+    g: &mut Graph,
     roots: &[NameId],
     trust: &[String],
     q: &Axioms<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
     let find = |n: &String| {
-        env.find_name(n)
-            .filter(|c| matches!(env.consts.get(c).map(|k| &k.kind), Some(Kind::Axiom)))
+        g.find_name(n)
+            .filter(|&c| g.node(c).is_some_and(|k| k.shape == Shape::Axiom))
             .ok_or_else(|| corrupt(format!("{n} is not an axiom")))
     };
     let uses = q.uses.iter().map(find).collect::<Result<Vec<_>>>()?;
@@ -245,23 +245,27 @@ pub fn axioms(
         .map(|o| o.iter().map(find).collect::<Result<FxHashSet<_>>>())
         .transpose()?;
     let listed: Vec<NameId> = if roots.is_empty() {
-        env.roots().collect()
+        g.nodes.iter().map(|n| n.name).collect()
     } else {
-        env.cone(roots)?.into_iter().map(|(_, c)| c).collect()
+        g.cone(roots)?
+            .into_iter()
+            .map(|i| g.nodes[i].name)
+            .collect()
     };
-    let module: FxHashMap<NameId, usize> = (0..env.modules.len())
-        .flat_map(|m| env.module_consts(m).iter().map(move |&c| (c, m)))
+    let listed: Vec<NameId> = listed
+        .into_iter()
+        .filter(|&c| {
+            let k = g.node(c).expect("listed");
+            !g.is_internal(c)
+                && !matches!(k.shape, Shape::Ctor { .. } | Shape::Rec { .. })
+                && !trusted(&g.modules[k.module as usize], trust)
+        })
         .collect();
+    g.reach(&listed)?;
+    let env = &*g;
     let mut a = Sets::new(env);
     let (mut rows, mut count) = (Vec::new(), FxHashMap::<NameId, usize>::default());
     for c in listed {
-        let k = &env.consts[&c];
-        if env.is_internal(c)
-            || matches!(k.kind, Kind::Ctor(_) | Kind::Rec(_))
-            || trusted(&env.modules[module[&c]], trust)
-        {
-            continue;
-        }
         let set = a.of(c)?;
         let hit: Vec<NameId> = if !uses.is_empty() {
             uses.iter().copied().filter(|x| set.contains(x)).collect()
@@ -309,19 +313,17 @@ pub fn axioms(
 }
 
 /// Memoized axiom sets, one per declaration or inductive block, interned.
-struct Sets<'e> {
-    env: &'e Env,
-    b: Builtins,
+struct Sets<'g> {
+    g: &'g Graph,
     of: FxHashMap<NameId, u32>,
     table: Vec<Box<[NameId]>>,
     index: FxHashMap<Box<[NameId]>, u32>,
 }
 
-impl<'e> Sets<'e> {
-    fn new(env: &'e Env) -> Self {
+impl<'g> Sets<'g> {
+    fn new(g: &'g Graph) -> Self {
         let mut s = Self {
-            env,
-            b: Builtins::find(env),
+            g,
             of: FxHashMap::default(),
             table: Vec::new(),
             index: FxHashMap::default(),
@@ -343,53 +345,56 @@ impl<'e> Sets<'e> {
         i
     }
 
+    fn shape(&self, c: NameId) -> Option<&'g Shape> {
+        self.g.node(c).map(|n| &n.shape)
+    }
+
     /// The constant that stands for `c`'s whole inductive block, or `c`.
     fn block(&self, c: NameId) -> NameId {
-        let base = match self.env.consts.get(&c).map(|k| &k.kind) {
-            Some(Kind::Ctor(x)) => x.induct,
-            Some(Kind::Rec(r)) => return r.all.first().copied().unwrap_or(c),
+        let base = match self.shape(c) {
+            Some(Shape::Ctor { induct }) => *induct,
+            Some(Shape::Rec { all }) => return all.first().copied().unwrap_or(c),
             _ => c,
         };
-        match self.env.consts.get(&base).map(|k| &k.kind) {
-            Some(Kind::Induct(i)) => i.all.first().copied().unwrap_or(base),
+        match self.shape(base) {
+            Some(Shape::Induct { all, .. }) => all.first().copied().unwrap_or(base),
             _ => base,
         }
     }
 
+    /// What the terms of `c` name, as read by [`Graph::reach`].
+    fn refs(&self, c: NameId) -> Result<&'g [NameId]> {
+        let g = self.g;
+        let i = g.position(c).expect("a node");
+        g.refs(i)
+            .map(|r| &*r.names)
+            .ok_or_else(|| corrupt(format!("the terms of {} are not read", g.display(c))))
+    }
+
     /// The blocks `c`'s block mentions, itself left out.
     fn deps(&self, c: NameId) -> Result<Vec<NameId>> {
-        let env = self.env;
-        let Some(k) = env.consts.get(&c) else {
-            return Ok(Vec::new());
-        };
-        let terms: Vec<ExprId> = match &k.kind {
-            Kind::Axiom => return Ok(Vec::new()),
-            Kind::Induct(i) => env.family(k, i)?.terms().collect(),
-            Kind::Thm(t) => {
-                let v = t.value.ok_or_else(|| {
-                    corrupt(format!("the value of {} is not loaded", env.display(c)))
-                })?;
-                vec![k.ty, v]
-            }
-            Kind::Defn(d) => vec![k.ty, d.value],
-            Kind::Opaque(o) => vec![k.ty, o.value],
-            Kind::Quot(_) | Kind::Ctor(_) | Kind::Rec(_) => vec![k.ty],
-        };
-        let (mut seen, mut consts) = (FxHashSet::default(), FxHashSet::default());
-        let mut todo = terms;
-        while let Some(e) = todo.pop() {
-            if seen.insert(e) {
-                env.children(e, &self.b, |d| match d {
-                    Dep::Expr(x) => todo.push(x),
-                    Dep::Const(n) => {
-                        consts.insert(n);
+        let g = self.g;
+        let mut consts = Vec::new();
+        match self.shape(c) {
+            None | Some(Shape::Axiom) => return Ok(consts),
+            Some(Shape::Induct { all, .. }) => {
+                for &t in all {
+                    if let Some(Shape::Induct { ctors, .. }) = self.shape(t) {
+                        for &k in std::iter::once(&t).chain(ctors) {
+                            if self.shape(k).is_some() {
+                                consts.extend(self.refs(k)?);
+                            }
+                        }
                     }
-                    _ => {}
-                });
+                }
+                for &r in g.recursors(c) {
+                    consts.extend(self.refs(r)?);
+                }
             }
+            Some(_) => consts.extend(self.refs(c)?),
         }
         let mut out: Vec<NameId> = consts.into_iter().map(|n| self.block(n)).collect();
-        out.sort_unstable_by_key(|n| n.index());
+        out.sort_unstable_by_key(|&n| (g.position(n).unwrap_or(usize::MAX), n.index()));
         out.dedup();
         out.retain(|&n| n != c);
         Ok(out)
@@ -410,7 +415,7 @@ impl<'e> Sets<'e> {
             }
             if let Some(deps) = deps {
                 let mut v: Vec<NameId> = deps.iter().flat_map(|&d| self.set(d)).copied().collect();
-                if matches!(self.env.consts.get(&n).map(|k| &k.kind), Some(Kind::Axiom)) {
+                if self.shape(n) == Some(&Shape::Axiom) {
                     v.push(n);
                 }
                 let i = self.intern(v);
@@ -444,4 +449,83 @@ impl<'e> Sets<'e> {
         }
         Ok(chain)
     }
+}
+
+/// Write, as NDJSON, what each declaration's terms name.
+///
+/// Covers the cone of `roots`, or every loaded module without roots, outside the modules
+/// `trust` names. With `modules`, one line per module instead, counting the references
+/// into each module.
+pub fn deps(
+    g: &mut Graph,
+    roots: &[NameId],
+    trust: &[String],
+    modules: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let listed: Vec<usize> = if roots.is_empty() {
+        (0..g.nodes.len()).collect()
+    } else {
+        g.cone(roots)?
+    };
+    let listed: Vec<usize> = listed
+        .into_iter()
+        .filter(|&i| !trusted(&g.modules[g.nodes[i].module as usize], trust))
+        .collect();
+    g.scan(&listed)?;
+    let uses = |i: usize| {
+        let mut u: Vec<usize> = g
+            .refs(i)
+            .expect("scanned")
+            .names
+            .iter()
+            .filter_map(|&n| g.position(n))
+            .collect();
+        u.sort_unstable();
+        u
+    };
+    let line = |out: &mut dyn Write, v: serde_json::Value| -> Result<()> {
+        serde_json::to_writer(&mut *out, &v).map_err(|e| Error::Io(e.into()))?;
+        Ok(writeln!(out)?)
+    };
+    if !modules {
+        for &i in &listed {
+            let n = &g.nodes[i];
+            let uses: Vec<String> = uses(i)
+                .into_iter()
+                .map(|j| g.display(g.nodes[j].name))
+                .collect();
+            line(
+                out,
+                json!({
+                    "name": g.display(n.name),
+                    "module": g.modules[n.module as usize],
+                    "kind": n.shape.kind(),
+                    "uses": uses,
+                }),
+            )?;
+        }
+        return Ok(());
+    }
+    let mut by: Vec<(usize, FxHashMap<u32, usize>)> = vec![Default::default(); g.modules.len()];
+    for &i in &listed {
+        let m = g.nodes[i].module as usize;
+        by[m].0 += 1;
+        for j in uses(i) {
+            *by[m].1.entry(g.nodes[j].module).or_default() += 1;
+        }
+    }
+    for (m, (decls, to)) in by.into_iter().enumerate().filter(|(_, (d, _))| *d > 0) {
+        let mut to: Vec<_> = to.into_iter().collect();
+        to.sort_unstable();
+        let uses: serde_json::Map<String, serde_json::Value> = to
+            .into_iter()
+            .map(|(t, n)| (g.modules[t as usize].clone(), n.into()))
+            .collect();
+        line(
+            out,
+            json!({"module": g.modules[m], "decls": decls, "uses": uses}),
+        )?;
+    }
+    Ok(())
 }

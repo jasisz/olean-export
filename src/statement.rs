@@ -126,7 +126,7 @@ pub(crate) fn at(module: &str, lines: Option<(u64, u64)>) -> String {
 
 /// The first and last source line of each declaration of a module, from `declRangeExt`.
 pub(crate) fn ranges(path: &Path) -> Result<FxHashMap<String, (u64, u64)>> {
-    let img = Image::open_module(path)?;
+    let img = Image::peek_module(path)?;
     let mut out = FxHashMap::default();
     for e in img.array(img.field(img.root, 4)?)? {
         if img.str_name(img.field(e, 0)?)? != "Lean.declRangeExt" {
