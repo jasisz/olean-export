@@ -54,7 +54,8 @@ fn reports_differences() {
     assert!(!d.only_a.is_empty() && d.only_b.is_empty() && d.differ.is_empty());
 }
 
-/// The fixtures against their edits in `cases/edit`, and a rename made by hand.
+/// The fixtures against their edits in `cases/edit` (a new proof of `N.add_zero`, a new
+/// value of `two`), and a rename made by hand.
 #[test]
 fn drift_tells_statements_from_names() {
     use olean_export::compare::{drift, Verdict};
@@ -75,7 +76,10 @@ fn drift_tells_statements_from_names() {
         (d.removed, d.added),
         (vec!["letty".to_owned()], vec!["three".to_owned()])
     );
-    assert!(d.proofs.is_empty() && d.renamed.is_empty());
+    assert_eq!(
+        (d.proofs, d.renamed.len()),
+        (vec!["N.add_zero".to_owned()], 0)
+    );
     let v: Vec<&Verdict> = d.targets.iter().map(|(_, v)| v).collect();
     assert_eq!(v[0], &Verdict::Kept);
     assert_eq!(v[1], &Verdict::Changed(vec!["two".into()]));

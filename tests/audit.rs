@@ -26,8 +26,11 @@ fn digest_follows_the_cone() {
             .remove(0)
     };
     let (x, y) = (dig(&a, "N.add_zero"), dig(&b, "N.add_zero"));
-    assert_eq!((x.statement, x.full), (y.statement, y.full));
+    assert_eq!(x.statement, y.statement);
+    assert_ne!(x.full, y.full);
     assert_ne!(x.statement.0, x.full.0);
+    let (x, y) = (dig(&a, "Even"), dig(&b, "Even"));
+    assert_eq!((x.statement, x.full), (y.statement, y.full));
     assert_ne!(dig(&a, "two").statement, dig(&b, "two").statement);
 }
 
@@ -60,4 +63,20 @@ fn axioms_by_query() {
     };
     let s = run(&e, |e, out| audit::axioms(e, &[], &[], &only, out).unwrap());
     assert_eq!(s, "-- 0 declarations; by axiom: \n");
+}
+
+/// Outside the trusted modules every proof is decoded, inside only those reached.
+#[test]
+fn load_outside_skips_unreached_proofs() {
+    use olean_export::Kind;
+    let dir = [PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases/build")];
+    let loaded = |root: &str, trust: &[&str]| {
+        let trust: Vec<String> = trust.iter().map(|&t| t.to_owned()).collect();
+        let e = Env::load_outside(&dir, &[root], &trust, 1, &|_, _| {}).unwrap();
+        let c = &e.consts[&e.find_name("N.add_zero").unwrap()];
+        matches!(&c.kind, Kind::Thm(t) if t.value.is_some())
+    };
+    assert!(!loaded("Top", &["Base"]));
+    assert!(loaded("Pinned", &["Base"]));
+    assert!(loaded("Top", &[]));
 }

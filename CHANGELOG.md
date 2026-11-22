@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `axioms --trust` decodes only proofs reached.
+- Add `Env::load_outside`, cone outside trusted modules.
+- `unused` drops Mathlib and compiler bookkeeping tags.
+
 ## 0.8.0 (2026-11-22)
 
 - Ship Linux and macOS release binaries.

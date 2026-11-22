@@ -258,6 +258,7 @@ fn main() -> ExitCode {
             &cli,
             modules,
             consts,
+            trust,
             output.as_ref(),
             |env, search, roots, out| olean_export::audit::unused(env, search, roots, trust, out),
         ),
@@ -273,6 +274,7 @@ fn main() -> ExitCode {
             &cli,
             modules,
             consts,
+            trust,
             output.as_ref(),
             |env, _, roots, out| {
                 let q = olean_export::audit::Axioms {
@@ -760,14 +762,17 @@ fn audit(
     cli: &Cli,
     modules: &[String],
     consts: &[String],
+    trust: &[String],
     output: Option<&PathBuf>,
     f: impl FnOnce(&Env, &[PathBuf], &[NameId], &mut dyn Write) -> olean_export::Result<()> + Send,
 ) -> Res {
     let search = search(cli)?;
     let roots: Vec<&str> = modules.iter().map(String::as_str).collect();
     let names: Vec<&str> = consts.iter().map(String::as_str).collect();
-    let env = if names.is_empty() {
+    let env = if names.is_empty() && trust.is_empty() {
         Env::load_with(&search, &roots, jobs(cli), &|_, _| {})?
+    } else if names.is_empty() {
+        Env::load_outside(&search, &roots, trust, jobs(cli), &|_, _| {})?
     } else {
         Env::load_cone(&search, &roots, &names, jobs(cli), &|_, _| {})?
     };
@@ -799,7 +804,7 @@ fn deep<T: Send>(
 }
 
 fn digest(cli: &Cli, modules: &[String], consts: &[String]) -> Res {
-    audit(cli, modules, consts, None, |env, _, roots, out| {
+    audit(cli, modules, consts, &[], None, |env, _, roots, out| {
         for d in olean_export::audit::digest(env, roots)? {
             for (what, (key, n)) in [("statement", d.statement), ("full", d.full)] {
                 let key = key.map_or_else(|| "-".repeat(64), |k| hex(&k));

@@ -112,6 +112,7 @@ pub fn unused(
 /// Extensions, by short name, that every declaration of a kind gets or that serve only the
 /// compiler, which say nothing about how it is used.
 const QUIET: &[&str] = &[
+    "alias",
     "auxParentProjInfo",
     "backwardDefeq",
     "base",
@@ -120,10 +121,13 @@ const QUIET: &[&str] = &[
     "declMap",
     "declMeta",
     "declRange",
+    "defeq",
+    "deprecated",
     "docString",
     "eqnInfo",
     "existingToIncorrect",
     "exportedAxioms",
+    "extension",
     "extern",
     "extType",
     "functionSummaries",
@@ -134,22 +138,30 @@ const QUIET: &[&str] = &[
     "incorrectToExisting",
     "inheritDocString",
     "inlineAttrs",
+    "machineApplicableDeprecated",
     "methodSpecs",
     "mono",
     "monoType",
     "namespaces",
     "neverExtract",
+    "nolint",
     "noncomputable",
     "privateConstKinds",
     "projectionFnInfo",
+    "protected",
     "rec",
     "recommendedSpellingByName",
     "reducibilityCore",
+    "sineQueNon",
+    "sparseCasesOnInfo",
     "specCache",
     "specialize",
     "specInfo",
     "structure",
+    "symbolFrequency",
+    "tag",
     "taggedReturn",
+    "translations",
     "trivialStructureInfo",
     "unbox",
     "versoDocString",
@@ -157,17 +169,28 @@ const QUIET: &[&str] = &[
 ];
 
 /// The extensions of a module that mention each of `names`, without their namespace and
-/// `Ext` suffix: `instance` for `Lean.Meta.instanceExtension`.
+/// `Ext` suffix: `instance` for `Lean.Meta.instanceExtension`. A hygienic one, as
+/// `register_simp_attr` makes, is named by the module that registered it.
 fn tags(img: &Image, names: &FxHashSet<String>) -> Result<FxHashMap<String, Vec<String>>> {
     let mut out: FxHashMap<String, Vec<String>> = FxHashMap::default();
     for e in img.array(img.field(img.root, 4)?)? {
         let ext = img.str_name(img.field(e, 0)?)?;
-        let last = ext.rsplit('.').next().unwrap_or(&ext);
-        let short = ["Extension", "Ext", "Attribute", "Attr"]
-            .iter()
-            .find_map(|s| last.strip_suffix(s).filter(|t| !t.is_empty()))
-            .unwrap_or(last);
-        if QUIET.contains(&short) {
+        let short = if let Some((_, scope)) = ext.split_once("._@.") {
+            let m: Vec<&str> = scope
+                .split('.')
+                .take_while(|c| !c.starts_with(|d: char| d.is_ascii_digit()))
+                .collect();
+            m[m.len().saturating_sub(2)..].join(".")
+        } else {
+            let last = ext.rsplit('.').next().unwrap_or(&ext);
+            ["Extension", "Ext", "Attribute", "Attr"]
+                .iter()
+                .find_map(|s| last.strip_suffix(s).filter(|t| !t.is_empty()))
+                .unwrap_or(last)
+                .to_owned()
+        };
+        let short = short.as_str();
+        if QUIET.contains(&short) || ext.starts_with("Lean.Compiler.") {
             continue;
         }
         let (mut seen, mut todo) = (FxHashSet::default(), vec![img.field(e, 1)?]);

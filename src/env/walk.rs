@@ -100,8 +100,7 @@ impl Env {
         progress: &(dyn Fn(usize, usize) + Sync),
     ) -> Result<Self> {
         let mut env = Self::build(search, roots, jobs, progress, true, true)?;
-        let mut live = env.live.take().expect("built live");
-        let mut todo = consts
+        let todo = consts
             .iter()
             .map(|c| {
                 env.find_name(c)
@@ -109,6 +108,31 @@ impl Env {
                     .ok_or_else(|| Error::UnknownConstant((*c).to_owned()))
             })
             .collect::<Result<Vec<_>>>()?;
+        env.decode_cone(todo)?;
+        Ok(env)
+    }
+
+    /// Like [`Env::load_cone`] of every constant outside the `trust` modules, or modules
+    /// under them.
+    pub fn load_outside(
+        search: &[PathBuf],
+        roots: &[&str],
+        trust: &[String],
+        jobs: usize,
+        progress: &(dyn Fn(usize, usize) + Sync),
+    ) -> Result<Self> {
+        let mut env = Self::build(search, roots, jobs, progress, true, true)?;
+        let todo = (0..env.modules.len())
+            .filter(|&m| !crate::statement::trusted(&env.modules[m], trust))
+            .flat_map(|m| env.module_consts(m).iter().map(|&c| Dep::Const(c)))
+            .collect();
+        env.decode_cone(todo)?;
+        Ok(env)
+    }
+
+    /// Decode the theorem values a full walk from `todo` reaches, round by round.
+    fn decode_cone(&mut self, mut todo: Vec<Dep>) -> Result<()> {
+        let mut live = self.live.take().expect("built live");
         let pending: FxHashMap<NameId, (usize, u64)> = live
             .loaded
             .iter()
@@ -117,21 +141,21 @@ impl Env {
             .collect();
         let mut walk = Walk::new(Depth::Full);
         loop {
-            let mut due: Vec<_> = env
+            let mut due: Vec<_> = self
                 .walk(&mut walk, todo)?
                 .into_iter()
                 .map(|n| (pending[&n], n))
                 .collect();
             if due.is_empty() {
-                env.live = Some(live);
-                return Ok(env);
+                self.live = Some(live);
+                return Ok(());
             }
             due.sort_unstable_by_key(|&(p, _)| p);
             todo = Vec::new();
-            for (n, v) in env.decode_values(&mut live, &due)? {
+            for (n, v) in self.decode_values(&mut live, &due)? {
                 if let Some(Const {
                     kind: Kind::Thm(t), ..
-                }) = env.consts.get_mut(&n)
+                }) = self.consts.get_mut(&n)
                 {
                     t.value = Some(v);
                 }

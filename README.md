@@ -78,7 +78,7 @@ lake env olean-export statement FLT -c THEOREM --trust Init,Std,Lean,Mathlib
 
 `unused -c NAME` lists what the full cone of `NAME` leaves unused, outside `--trust` modules: whole files, then each declaration with its source range. A tag lists the attributes that mention it, like `instance` or `simp`, which may use it only while elaborating.
 
-`axioms` prints the axioms each declaration rests on, as `#print axioms` collects them, for the cone of `-c NAME` or all loaded modules. `--uses AXIOMS` keeps declarations resting on one of them, `--only AXIOMS` those resting on anything else, and `--why` shows a chain down to the axiom.
+`axioms` prints the axioms each declaration rests on, as `#print axioms` collects them, for the cone of `-c NAME` or all loaded modules outside `--trust`. Only the trusted proofs they reach are decoded. `--uses AXIOMS` keeps declarations resting on one of them, `--only AXIOMS` those resting on anything else, and `--why` shows a chain down to the axiom.
 
 `digest -c NAME` prints two closure keys: one for the statement cone, one for the full cone. They ignore ids, record order, paths and the exporter, so they make a stable receipt for a build.
 
@@ -143,9 +143,10 @@ $ olean-export compare want.ndjson got.blean
 $ olean-export -L tests/cases/build/edit Top -o new.ndjson
 $ olean-export compare want.ndjson new.ndjson --statements -c N.add_zero -c two
 statement: two (value)
+proof: N.add_zero
 removed: letty
 added: three
-33 / 33 declarations: 31 same, 0 proof only, 1 statement, 0 renamed, 1 removed, 1 added
+33 / 33 declarations: 30 same, 1 proof only, 1 statement, 0 renamed, 1 removed, 1 added
 N.add_zero: statement kept exactly
 two: statement changed, through two
 error: statements differ
