@@ -790,6 +790,7 @@ impl<'a, S: Sink> Exporter<'a, S> {
                 num_nested: *num_nested,
                 is_rec: *is_rec,
                 is_reflexive: *is_reflexive,
+                flags: None,
             });
         }
         self.decl(Decl::Inductive {

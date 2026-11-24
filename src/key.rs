@@ -52,6 +52,7 @@ mod tag {
     pub(super) const IND: u8 = 25;
     pub(super) const CTOR: u8 = 26;
     pub(super) const REC: u8 = 27;
+    pub(super) const IND_FLAGS: u8 = 28;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -624,6 +625,9 @@ impl<'k> Enc<'k> {
                     );
                     self.konsts(&t.all)?;
                     self.konsts(&t.ctors)?;
+                    if let Some(f) = t.flags {
+                        self.record(tag::IND_FLAGS, &[f.bits().into()]);
+                    }
                 }
                 for c in ctors {
                     self.info(tag::CTOR, &c.head)?;
