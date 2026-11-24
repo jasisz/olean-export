@@ -7,6 +7,10 @@
 - Add `Graph`, a lazy constant reference graph.
 - `unused` drops Mathlib and compiler bookkeeping tags.
 - Big Nat literals convert with `dashu-int` (MIT or Apache-2.0) in place of LGPL `malachite-nz`.
+- Read and write format 3.2.0 flags.
+- Add `IndType::flags`, `None` before 3.2.0.
+- blean version 2 carries inductive flags.
+- `compare` ignores inductive flags.
 
 ## 0.8.0 (2026-11-22)
 

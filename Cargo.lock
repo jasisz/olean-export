@@ -493,7 +493,7 @@ checksum = "bd8e500409e6cd603b03e477c26a6caecdc27ac58979a53e881c75eafc079f44"
 
 [[package]]
 name = "olean-export"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "blake3",
  "clap",

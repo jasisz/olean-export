@@ -1,10 +1,11 @@
-//! The lean4export 3.1.0 NDJSON format.
+//! The lean4export NDJSON format, 3.1.0 and 3.2.0.
 
 use crate::{
     env::{Binder, Hints, QuotKind},
     error::{corrupt, Result},
     record::{
-        Binding, Counts, Decl, Head, IndCtor, IndRec, IndRule, IndType, Record, Safety, Sink,
+        Binding, Counts, Decl, Head, IndCtor, IndFlags, IndRec, IndRule, IndType, Record, Safety,
+        Sink,
     },
 };
 use rayon::prelude::*;
@@ -150,8 +151,20 @@ impl<W: Write> Ndjson<W> {
         self.s(r#"{"all":"#)
             .list(&t.all)
             .s(r#","ctors":"#)
-            .list(&t.ctors)
-            .s(r#","isRec":"#)
+            .list(&t.ctors);
+        if let Some(f) = t.flags {
+            self.s(r#","hasEta":"#)
+                .b(f.has_eta)
+                .s(r#","hasLargeElim":"#)
+                .b(f.has_large_elim)
+                .s(r#","hasProjections":"#)
+                .b(f.has_projections)
+                .s(r#","isImpredicative":"#)
+                .b(f.is_impredicative)
+                .s(r#","isK":"#)
+                .b(f.is_k);
+        }
+        self.s(r#","isRec":"#)
             .b(t.is_rec)
             .s(r#","isReflexive":"#)
             .b(t.is_reflexive)
@@ -777,6 +790,11 @@ struct JDecl {
     num_nested: Option<u64>,
     is_rec: Option<bool>,
     is_reflexive: Option<bool>,
+    is_impredicative: Option<bool>,
+    is_k: Option<bool>,
+    has_projections: Option<bool>,
+    has_eta: Option<bool>,
+    has_large_elim: Option<bool>,
     induct: Option<u32>,
     cidx: Option<u64>,
     num_fields: Option<u64>,
@@ -858,8 +876,38 @@ impl JDecl {
             num_nested: need!(self.num_nested, "numNested"),
             is_rec: need!(self.is_rec, "isRec"),
             is_reflexive: need!(self.is_reflexive, "isReflexive"),
+            flags: self.flags()?,
             head: self.head(),
         })
+    }
+
+    /// All five 3.2.0 flags, or none of them.
+    fn flags<E: de::Error>(&self) -> std::result::Result<Option<IndFlags>, E> {
+        match (
+            self.is_impredicative,
+            self.is_k,
+            self.has_projections,
+            self.has_eta,
+            self.has_large_elim,
+        ) {
+            (
+                Some(is_impredicative),
+                Some(is_k),
+                Some(has_projections),
+                Some(has_eta),
+                Some(has_large_elim),
+            ) => Ok(Some(IndFlags {
+                is_impredicative,
+                is_k,
+                has_projections,
+                has_eta,
+                has_large_elim,
+            })),
+            (None, None, None, None, None) => Ok(None),
+            _ => Err(de::Error::custom(
+                "an inductive type has some but not all 3.2.0 flags",
+            )),
+        }
     }
 
     fn ind_ctor<E: de::Error>(mut self) -> std::result::Result<IndCtor, E> {

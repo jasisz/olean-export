@@ -2,7 +2,8 @@
 //! traversal in [`crate::Exporter`] produces these and every output format consumes them.
 //!
 //! The derived serde layout is also the blean format (see [`crate::blean`]), so variant
-//! and field order are part of the format and must not change.
+//! and field order are part of the format and must not change. [`IndType::flags`] is the
+//! one field outside it, which blean writes after the record.
 
 use crate::{
     env::{Binder, Hints, QuotKind},
@@ -312,6 +313,47 @@ pub struct IndType {
     pub num_nested: u64,
     pub is_rec: bool,
     pub is_reflexive: bool,
+    /// Written from format 3.2.0 on, `None` before.
+    #[serde(skip)]
+    pub flags: Option<IndFlags>,
+}
+
+/// The per-type facts format 3.2.0 adds, as the exporting kernel computed them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct IndFlags {
+    pub is_impredicative: bool,
+    pub is_k: bool,
+    pub has_projections: bool,
+    pub has_eta: bool,
+    pub has_large_elim: bool,
+}
+
+impl IndFlags {
+    /// Bits 0 to 4 in field order.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.is_impredicative as u8
+            | (self.is_k as u8) << 1
+            | (self.has_projections as u8) << 2
+            | (self.has_eta as u8) << 3
+            | (self.has_large_elim as u8) << 4
+    }
+
+    /// The flags of [`Self::bits`], or `None` if a higher bit is set.
+    #[must_use]
+    pub const fn from_bits(b: u8) -> Option<Self> {
+        if b >> 5 != 0 {
+            return None;
+        }
+        Some(Self {
+            is_impredicative: b & 1 != 0,
+            is_k: b & 2 != 0,
+            has_projections: b & 4 != 0,
+            has_eta: b & 8 != 0,
+            has_large_elim: b & 16 != 0,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

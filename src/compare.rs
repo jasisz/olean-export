@@ -158,7 +158,8 @@ impl<'c> Side<'c> {
     }
 
     /// `d` over shared ids, with what lean4export may vary dropped: the `all` of axioms
-    /// and opaques, which only some versions write, and the order of a block's recursors.
+    /// and opaques and the inductive flags, which only some versions write, and the order of
+    /// a block's recursors.
     fn decl(&self, d: &Decl) -> Decl {
         match d {
             Decl::Axiom {
@@ -227,6 +228,7 @@ impl<'c> Side<'c> {
                             head: self.head(&t.head),
                             all: self.ns(&t.all),
                             ctors: self.ns(&t.ctors),
+                            flags: None,
                             ..t.clone()
                         })
                         .collect(),
